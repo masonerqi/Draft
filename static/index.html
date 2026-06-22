@@ -1,0 +1,388 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>AI Lecture Summariser</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: #f5f5f5;
+      color: #1a1a1a;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 2rem 1rem;
+    }
+
+    header {
+      text-align: center;
+      margin-bottom: 2rem;
+    }
+
+    header h1 {
+      font-size: 1.75rem;
+      font-weight: 600;
+      color: #1a1a1a;
+    }
+
+    header p {
+      color: #666;
+      margin-top: 0.4rem;
+      font-size: 0.95rem;
+    }
+
+    .card {
+      background: white;
+      border-radius: 12px;
+      padding: 1.5rem;
+      width: 100%;
+      max-width: 680px;
+      box-shadow: 0 1px 4px rgba(0,0,0,0.08);
+      margin-bottom: 1.25rem;
+    }
+
+    .card h2 {
+      font-size: 1rem;
+      font-weight: 600;
+      margin-bottom: 1rem;
+      color: #333;
+    }
+
+    textarea {
+      width: 100%;
+      height: 140px;
+      border: 1px solid #ddd;
+      border-radius: 8px;
+      padding: 0.75rem;
+      font-size: 0.9rem;
+      resize: vertical;
+      font-family: inherit;
+      color: #1a1a1a;
+    }
+
+    textarea:focus { outline: none; border-color: #4A90E2; }
+
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 0.6rem 1.25rem;
+      border-radius: 8px;
+      font-size: 0.9rem;
+      font-weight: 500;
+      cursor: pointer;
+      border: none;
+      transition: opacity 0.15s;
+    }
+
+    .btn:hover { opacity: 0.85; }
+    .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+    .btn-primary { background: #4A90E2; color: white; }
+    .btn-danger  { background: #E24B4A; color: white; }
+    .btn-ghost   { background: #f0f0f0; color: #333; }
+
+    .btn-row {
+      display: flex;
+      gap: 10px;
+      margin-top: 1rem;
+      flex-wrap: wrap;
+    }
+
+    #record-btn.recording { background: #E24B4A; }
+
+    .status {
+      font-size: 0.85rem;
+      color: #888;
+      margin-top: 0.6rem;
+      min-height: 1.2rem;
+    }
+
+    .divider {
+      text-align: center;
+      color: #bbb;
+      font-size: 0.8rem;
+      margin: 0.5rem 0;
+    }
+
+    /* Results */
+    #results { display: none; }
+
+    .result-section { margin-bottom: 1.25rem; }
+
+    .result-section h3 {
+      font-size: 0.8rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: #888;
+      margin-bottom: 0.5rem;
+    }
+
+    .result-section p,
+    .result-section ul {
+      font-size: 0.92rem;
+      line-height: 1.65;
+      color: #222;
+    }
+
+    .result-section ul {
+      padding-left: 1.25rem;
+    }
+
+    .result-section ul li { margin-bottom: 0.25rem; }
+
+    /* Spinner */
+    #loading { display: none; text-align: center; padding: 1.5rem; }
+
+    .spinner {
+      width: 32px; height: 32px;
+      border: 3px solid #e0e0e0;
+      border-top-color: #4A90E2;
+      border-radius: 50%;
+      animation: spin 0.7s linear infinite;
+      margin: 0 auto 0.75rem;
+    }
+
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* History */
+    #history-list { list-style: none; }
+
+    #history-list li {
+      padding: 0.65rem 0;
+      border-bottom: 1px solid #f0f0f0;
+      font-size: 0.88rem;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 10px;
+    }
+
+    #history-list li:last-child { border-bottom: none; }
+
+    .history-meta { color: #888; font-size: 0.8rem; margin-top: 2px; }
+
+    .history-item-left { flex: 1; cursor: pointer; }
+    .history-item-left:hover .history-title { text-decoration: underline; }
+  </style>
+</head>
+<body>
+
+<header>
+  <h1>AI Lecture Summariser</h1>
+  <p>Record or paste a transcript and get a structured academic summary instantly.</p>
+</header>
+
+<!-- Input Card -->
+<div class="card">
+  <h2>Input</h2>
+
+  <!-- Record -->
+  <button class="btn btn-primary" id="record-btn" onclick="toggleRecord()">
+    ⏺ Start Recording
+  </button>
+  <div class="status" id="record-status">Click to record from your microphone.</div>
+
+  <div class="divider">— or paste a transcript —</div>
+
+  <textarea id="transcript-input" placeholder="Paste your meeting or lecture transcript here..."></textarea>
+
+  <div class="btn-row">
+    <button class="btn btn-primary" onclick="submitTranscript()">✦ Summarise</button>
+    <button class="btn btn-ghost" onclick="clearInput()">Clear</button>
+  </div>
+</div>
+
+<!-- Loading -->
+<div class="card" id="loading">
+  <div class="spinner"></div>
+  <p style="color:#888;font-size:0.9rem" id="loading-msg">Sending to Gemini...</p>
+</div>
+
+<!-- Results Card -->
+<div class="card" id="results">
+  <h2>Summary</h2>
+
+  <div class="result-section">
+    <h3>Key Discussion Points</h3>
+    <p id="result-summary"></p>
+  </div>
+
+  <div class="result-section">
+    <h3>Decisions Made</h3>
+    <ul id="result-decisions"></ul>
+  </div>
+
+  <div class="result-section">
+    <h3>Action Items</h3>
+    <ul id="result-actions"></ul>
+  </div>
+
+  <div class="btn-row">
+    <button class="btn btn-ghost" onclick="resetToInput()">⟵ New Summary</button>
+  </div>
+</div>
+
+<!-- History Card -->
+<div class="card">
+  <h2>Past Sessions</h2>
+  <ul id="history-list"><li style="color:#bbb">No sessions yet.</li></ul>
+</div>
+
+<script>
+  // ── State ──────────────────────────────────────────────────────────────────
+  let mediaRecorder = null;
+  let audioChunks   = [];
+  let isRecording   = false;
+
+  // ── Recording ──────────────────────────────────────────────────────────────
+  async function toggleRecord() {
+    if (!isRecording) {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        mediaRecorder = new MediaRecorder(stream);
+        audioChunks   = [];
+
+        mediaRecorder.ondataavailable = e => audioChunks.push(e.data);
+
+        mediaRecorder.onstop = async () => {
+          const blob = new Blob(audioChunks, { type: "audio/webm" });
+          setStatus("Recording captured. Submitting to Gemini...");
+          await submitAudio(blob);
+        };
+
+        mediaRecorder.start();
+        isRecording = true;
+        document.getElementById("record-btn").textContent = "⏹ Stop Recording";
+        document.getElementById("record-btn").classList.add("recording");
+        setStatus("Recording... click Stop when done.");
+      } catch (err) {
+        setStatus("Microphone access denied. Please allow microphone access.");
+      }
+    } else {
+      mediaRecorder.stop();
+      mediaRecorder.stream.getTracks().forEach(t => t.stop());
+      isRecording = false;
+      document.getElementById("record-btn").textContent = "⏺ Start Recording";
+      document.getElementById("record-btn").classList.remove("recording");
+    }
+  }
+
+  async function submitAudio(blob) {
+    const formData = new FormData();
+    formData.append("audio", blob, "recording.webm");
+    await submitToAPI(formData, "Processing audio with Gemini...");
+  }
+
+  // ── Transcript paste ───────────────────────────────────────────────────────
+  async function submitTranscript() {
+    const text = document.getElementById("transcript-input").value.trim();
+    if (!text) { alert("Please paste a transcript first."); return; }
+    const formData = new FormData();
+    formData.append("transcript", text);
+    await submitToAPI(formData, "Summarising transcript...");
+  }
+
+  // ── API call ───────────────────────────────────────────────────────────────
+  async function submitToAPI(formData, msg) {
+    showLoading(msg);
+    try {
+      const res  = await fetch("/summarise", { method: "POST", body: formData });
+      const data = await res.json();
+      if (!res.ok) { alert("Error: " + (data.error || "Unknown error")); hideLoading(); return; }
+      showResults(data);
+      loadHistory();
+    } catch (err) {
+      alert("Network error. Is the Flask server running?");
+      hideLoading();
+    }
+  }
+
+  // ── Render results ─────────────────────────────────────────────────────────
+  function showResults(data) {
+    hideLoading();
+    document.getElementById("result-summary").textContent = data.summary;
+
+    const dList = document.getElementById("result-decisions");
+    dList.innerHTML = "";
+    (data.decisions || []).forEach(d => {
+      const li = document.createElement("li");
+      li.textContent = d;
+      dList.appendChild(li);
+    });
+
+    const aList = document.getElementById("result-actions");
+    aList.innerHTML = "";
+    (data.action_items || []).forEach(a => {
+      const li = document.createElement("li");
+      li.textContent = a;
+      aList.appendChild(li);
+    });
+
+    document.getElementById("results").style.display = "block";
+    document.getElementById("results").scrollIntoView({ behavior: "smooth" });
+  }
+
+  // ── History ────────────────────────────────────────────────────────────────
+  async function loadHistory() {
+    const res  = await fetch("/sessions");
+    const data = await res.json();
+    const list = document.getElementById("history-list");
+    if (!data.length) { list.innerHTML = '<li style="color:#bbb">No sessions yet.</li>'; return; }
+    list.innerHTML = data.map(s => `
+      <li>
+        <div class="history-item-left" onclick="loadSession(${s.id})">
+          <div class="history-title">${s.summary.substring(0, 80)}...</div>
+          <div class="history-meta">${s.input_type} · ${new Date(s.created_at).toLocaleString()}</div>
+        </div>
+        <button class="btn btn-danger" style="padding:4px 10px;font-size:0.8rem"
+          onclick="deleteSession(${s.id})">Delete</button>
+      </li>`).join("");
+  }
+
+  async function loadSession(id) {
+    const res  = await fetch(`/sessions/${id}`);
+    const data = await res.json();
+    showResults(data);
+  }
+
+  async function deleteSession(id) {
+    await fetch(`/sessions/${id}`, { method: "DELETE" });
+    loadHistory();
+  }
+
+  // ── Helpers ────────────────────────────────────────────────────────────────
+  function showLoading(msg) {
+    document.getElementById("loading").style.display = "block";
+    document.getElementById("loading-msg").textContent = msg;
+    document.getElementById("results").style.display  = "none";
+  }
+
+  function hideLoading() {
+    document.getElementById("loading").style.display = "none";
+  }
+
+  function setStatus(msg) {
+    document.getElementById("record-status").textContent = msg;
+  }
+
+  function clearInput() {
+    document.getElementById("transcript-input").value = "";
+  }
+
+  function resetToInput() {
+    document.getElementById("results").style.display = "none";
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }
+
+  // ── Init ───────────────────────────────────────────────────────────────────
+  loadHistory();
+</script>
+
+</body>
+</html>
