@@ -1,246 +1,509 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>AI Lecture Summariser</title>
-  <style>
-    * { box-sizing: border-box; margin: 0; padding: 0; }
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>AI Lecture Summariser</title>
+<style>
+  :root {
+    --bg-app: #fbfbfa;
+    --bg-sidebar: #f7f6f3;
+    --bg-hover: #efeeec;
+    --border: #e9e8e4;
+    --text-primary: #37352f;
+    --text-secondary: #787774;
+    --text-tertiary: #a8a6a0;
+    --accent: #2383e2;
+    --accent-soft: #e7f3fe;
+    --danger: #e16259;
+    --danger-soft: #fdecea;
+    --radius: 6px;
+    --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+    --font-mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  }
 
-    body {
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-      background: #f5f5f5;
-      color: #1a1a1a;
-      min-height: 100vh;
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      padding: 2rem 1rem;
-    }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
 
-    header {
-      text-align: center;
-      margin-bottom: 2rem;
-    }
+  body {
+    font-family: var(--font-sans);
+    background: var(--bg-app);
+    color: var(--text-primary);
+    font-size: 15px;
+    line-height: 1.6;
+  }
 
-    header h1 {
-      font-size: 1.75rem;
-      font-weight: 600;
-      color: #1a1a1a;
-    }
+  .app {
+    display: flex;
+    min-height: 100vh;
+  }
 
-    header p {
-      color: #666;
-      margin-top: 0.4rem;
-      font-size: 0.95rem;
-    }
+  /* ── Sidebar ────────────────────────────────────────────────────────── */
+  .sidebar {
+    width: 260px;
+    flex-shrink: 0;
+    background: var(--bg-sidebar);
+    border-right: 1px solid var(--border);
+    height: 100vh;
+    position: sticky;
+    top: 0;
+    display: flex;
+    flex-direction: column;
+    overflow-y: auto;
+  }
 
-    .card {
-      background: white;
-      border-radius: 12px;
-      padding: 1.5rem;
-      width: 100%;
-      max-width: 680px;
-      box-shadow: 0 1px 4px rgba(0,0,0,0.08);
-      margin-bottom: 1.25rem;
-    }
+  .sidebar-header {
+    padding: 16px 14px 10px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
 
-    .card h2 {
-      font-size: 1rem;
-      font-weight: 600;
-      margin-bottom: 1rem;
-      color: #333;
-    }
+  .sidebar-header .icon {
+    width: 22px; height: 22px;
+    border-radius: 4px;
+    background: var(--accent);
+    display: flex; align-items: center; justify-content: center;
+    font-size: 13px;
+    flex-shrink: 0;
+  }
 
-    textarea {
-      width: 100%;
-      height: 140px;
-      border: 1px solid #ddd;
-      border-radius: 8px;
-      padding: 0.75rem;
-      font-size: 0.9rem;
-      resize: vertical;
-      font-family: inherit;
-      color: #1a1a1a;
-    }
+  .sidebar-header span {
+    font-weight: 600;
+    font-size: 14px;
+    color: var(--text-primary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
 
-    textarea:focus { outline: none; border-color: #4A90E2; }
+  .sidebar-new {
+    margin: 4px 8px 14px;
+    padding: 6px 10px;
+    border-radius: var(--radius);
+    background: transparent;
+    border: none;
+    color: var(--text-secondary);
+    font-size: 13.5px;
+    text-align: left;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .sidebar-new:hover { background: var(--bg-hover); color: var(--text-primary); }
 
-    .btn {
-      display: inline-flex;
-      align-items: center;
-      gap: 6px;
-      padding: 0.6rem 1.25rem;
-      border-radius: 8px;
-      font-size: 0.9rem;
-      font-weight: 500;
-      cursor: pointer;
-      border: none;
-      transition: opacity 0.15s;
-    }
+  .sidebar-section-label {
+    padding: 4px 14px;
+    font-size: 11.5px;
+    font-weight: 600;
+    color: var(--text-tertiary);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    margin-top: 6px;
+  }
 
-    .btn:hover { opacity: 0.85; }
-    .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+  .history-list {
+    list-style: none;
+    flex: 1;
+    padding: 2px 8px 16px;
+  }
 
-    .btn-primary { background: #4A90E2; color: white; }
-    .btn-danger  { background: #E24B4A; color: white; }
-    .btn-ghost   { background: #f0f0f0; color: #333; }
+  .history-item {
+    border-radius: var(--radius);
+    padding: 7px 8px;
+    cursor: pointer;
+    margin-bottom: 1px;
+    position: relative;
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+  }
+  .history-item:hover { background: var(--bg-hover); }
+  .history-item:hover .history-delete { display: block; }
+  .history-item.active { background: var(--accent-soft); }
 
-    .btn-row {
-      display: flex;
-      gap: 10px;
-      margin-top: 1rem;
-      flex-wrap: wrap;
-    }
+  .history-item .doc-icon {
+    font-size: 13px;
+    margin-top: 1px;
+    flex-shrink: 0;
+    color: var(--text-tertiary);
+  }
 
-    #record-btn.recording { background: #E24B4A; }
+  .history-item-body { flex: 1; min-width: 0; }
 
-    .status {
-      font-size: 0.85rem;
-      color: #888;
-      margin-top: 0.6rem;
-      min-height: 1.2rem;
-    }
+  .history-title {
+    font-size: 13.5px;
+    color: var(--text-primary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
 
-    .divider {
-      text-align: center;
-      color: #bbb;
-      font-size: 0.8rem;
-      margin: 0.5rem 0;
-    }
+  .history-meta {
+    font-size: 11.5px;
+    color: var(--text-tertiary);
+    margin-top: 1px;
+  }
 
-    /* Results */
-    #results { display: none; }
+  .history-delete {
+    display: none;
+    background: none;
+    border: none;
+    color: var(--text-tertiary);
+    cursor: pointer;
+    font-size: 13px;
+    padding: 2px 4px;
+    border-radius: 4px;
+    flex-shrink: 0;
+  }
+  .history-delete:hover { background: var(--border); color: var(--danger); }
 
-    .result-section { margin-bottom: 1.25rem; }
+  .history-empty {
+    padding: 10px 14px;
+    font-size: 13px;
+    color: var(--text-tertiary);
+  }
 
-    .result-section h3 {
-      font-size: 0.8rem;
-      font-weight: 600;
-      text-transform: uppercase;
-      letter-spacing: 0.05em;
-      color: #888;
-      margin-bottom: 0.5rem;
-    }
+  /* ── Main content ───────────────────────────────────────────────────── */
+  .main {
+    flex: 1;
+    max-width: 760px;
+    margin: 0 auto;
+    padding: 56px 48px 100px;
+    width: 100%;
+  }
 
-    .result-section p,
-    .result-section ul {
-      font-size: 0.92rem;
-      line-height: 1.65;
-      color: #222;
-    }
+  .doc-title {
+    font-size: 2.1rem;
+    font-weight: 700;
+    margin-bottom: 6px;
+    letter-spacing: -0.01em;
+  }
 
-    .result-section ul {
-      padding-left: 1.25rem;
-    }
+  .doc-subtitle {
+    color: var(--text-secondary);
+    font-size: 14.5px;
+    margin-bottom: 36px;
+  }
 
-    .result-section ul li { margin-bottom: 0.25rem; }
+  .block-label {
+    font-size: 11.5px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--text-tertiary);
+    margin-bottom: 10px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
 
-    /* Spinner */
-    #loading { display: none; text-align: center; padding: 1.5rem; }
+  /* Record control */
+  .record-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 8px;
+  }
 
-    .spinner {
-      width: 32px; height: 32px;
-      border: 3px solid #e0e0e0;
-      border-top-color: #4A90E2;
-      border-radius: 50%;
-      animation: spin 0.7s linear infinite;
-      margin: 0 auto 0.75rem;
-    }
+  .record-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 16px;
+    border-radius: var(--radius);
+    font-size: 14px;
+    font-weight: 500;
+    cursor: pointer;
+    border: 1px solid var(--border);
+    background: white;
+    color: var(--text-primary);
+    transition: background 0.12s, border-color 0.12s;
+  }
+  .record-btn:hover { background: var(--bg-hover); }
+  .record-btn .dot {
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    background: var(--danger);
+  }
+  .record-btn.recording {
+    border-color: var(--danger);
+    background: var(--danger-soft);
+    color: var(--danger);
+  }
+  .record-btn.recording .dot { animation: pulse 1.1s ease-in-out infinite; }
 
-    @keyframes spin { to { transform: rotate(360deg); } }
+  @keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.3; }
+  }
 
-    /* History */
-    #history-list { list-style: none; }
+  .status-text {
+    font-size: 13px;
+    color: var(--text-tertiary);
+    min-height: 18px;
+    margin-bottom: 28px;
+  }
 
-    #history-list li {
-      padding: 0.65rem 0;
-      border-bottom: 1px solid #f0f0f0;
-      font-size: 0.88rem;
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      gap: 10px;
-    }
+  .divider-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin: 28px 0 18px;
+    color: var(--text-tertiary);
+    font-size: 12.5px;
+  }
+  .divider-row::before, .divider-row::after {
+    content: "";
+    flex: 1;
+    height: 1px;
+    background: var(--border);
+  }
 
-    #history-list li:last-child { border-bottom: none; }
+  textarea {
+    width: 100%;
+    min-height: 160px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 14px 16px;
+    font-size: 14.5px;
+    line-height: 1.6;
+    resize: vertical;
+    font-family: inherit;
+    color: var(--text-primary);
+    background: white;
+  }
+  textarea::placeholder { color: var(--text-tertiary); }
+  textarea:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
 
-    .history-meta { color: #888; font-size: 0.8rem; margin-top: 2px; }
+  .btn-row {
+    display: flex;
+    gap: 8px;
+    margin-top: 14px;
+  }
 
-    .history-item-left { flex: 1; cursor: pointer; }
-    .history-item-left:hover .history-title { text-decoration: underline; }
-  </style>
+  .btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 7px 14px;
+    border-radius: var(--radius);
+    font-size: 13.5px;
+    font-weight: 500;
+    cursor: pointer;
+    border: 1px solid transparent;
+    transition: opacity 0.12s, background 0.12s;
+  }
+  .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+  .btn-primary { background: var(--accent); color: white; }
+  .btn-primary:hover { opacity: 0.88; }
+
+  .btn-ghost { background: transparent; color: var(--text-secondary); border-color: var(--border); }
+  .btn-ghost:hover { background: var(--bg-hover); }
+
+  /* Loading state */
+  .loading-block {
+    display: none;
+    padding: 32px 0;
+    text-align: center;
+  }
+  .spinner {
+    width: 22px; height: 22px;
+    border: 2.5px solid var(--border);
+    border-top-color: var(--accent);
+    border-radius: 50%;
+    animation: spin 0.7s linear infinite;
+    margin: 0 auto 12px;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .loading-msg { font-size: 13.5px; color: var(--text-tertiary); }
+
+  /* Results */
+  #results { display: none; }
+
+  .result-section { margin-bottom: 30px; }
+
+  .result-section .body-text {
+    font-size: 15px;
+    line-height: 1.7;
+    color: var(--text-primary);
+  }
+
+  .result-section ul {
+    padding-left: 0;
+    list-style: none;
+  }
+  .result-section ul li {
+    font-size: 15px;
+    line-height: 1.65;
+    padding: 3px 0 3px 22px;
+    position: relative;
+  }
+  .result-section ul li::before {
+    content: "•";
+    position: absolute;
+    left: 6px;
+    color: var(--text-tertiary);
+  }
+
+  .empty-note {
+    font-size: 13.5px;
+    color: var(--text-tertiary);
+    font-style: italic;
+  }
+
+  /* Transcript toggle block (Notion-style disclosure) */
+  .toggle-block {
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    background: white;
+  }
+  .toggle-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 11px 14px;
+    cursor: pointer;
+    font-size: 13.5px;
+    font-weight: 500;
+    color: var(--text-secondary);
+    user-select: none;
+  }
+  .toggle-header:hover { color: var(--text-primary); }
+  .toggle-arrow {
+    display: inline-block;
+    transition: transform 0.15s;
+    font-size: 11px;
+    color: var(--text-tertiary);
+  }
+  .toggle-block.open .toggle-arrow { transform: rotate(90deg); }
+  .toggle-body {
+    display: none;
+    padding: 0 16px 16px 38px;
+    font-size: 14px;
+    line-height: 1.7;
+    color: var(--text-secondary);
+    white-space: pre-wrap;
+    border-top: 1px solid var(--border);
+    margin-top: 0;
+    padding-top: 14px;
+  }
+  .toggle-block.open .toggle-body { display: block; }
+
+  .results-footer {
+    margin-top: 36px;
+    padding-top: 20px;
+    border-top: 1px solid var(--border);
+  }
+
+  @media (max-width: 720px) {
+    .sidebar { display: none; }
+    .main { padding: 32px 20px 80px; }
+  }
+</style>
 </head>
 <body>
 
-<header>
-  <h1>AI Lecture Summariser</h1>
-  <p>Record or paste a transcript and get a structured academic summary instantly.</p>
-</header>
+<div class="app">
 
-<!-- Input Card -->
-<div class="card">
-  <h2>Input</h2>
+  <!-- ── Sidebar ── -->
+  <nav class="sidebar">
+    <div class="sidebar-header">
+      <div class="icon">🎓</div>
+      <span>Lecture Summariser</span>
+    </div>
 
-  <!-- Record -->
-  <button class="btn btn-primary" id="record-btn" onclick="toggleRecord()">
-    ⏺ Start Recording
-  </button>
-  <div class="status" id="record-status">Click to record from your microphone.</div>
+    <button class="sidebar-new" onclick="resetToInput()">
+      <span>＋</span> New summary
+    </button>
 
-  <div class="divider">— or paste a transcript —</div>
+    <div class="sidebar-section-label">Past sessions</div>
+    <ul class="history-list" id="history-list">
+      <li class="history-empty">No sessions yet.</li>
+    </ul>
+  </nav>
 
-  <textarea id="transcript-input" placeholder="Paste your meeting or lecture transcript here..."></textarea>
+  <!-- ── Main ── -->
+  <main class="main">
 
-  <div class="btn-row">
-    <button class="btn btn-primary" onclick="submitTranscript()">✦ Summarise</button>
-    <button class="btn btn-ghost" onclick="clearInput()">Clear</button>
-  </div>
-</div>
+    <!-- Input view -->
+    <div id="input-view">
+      <h1 class="doc-title">New summary</h1>
+      <p class="doc-subtitle">Record a lecture or paste a transcript to generate a structured summary.</p>
 
-<!-- Loading -->
-<div class="card" id="loading">
-  <div class="spinner"></div>
-  <p style="color:#888;font-size:0.9rem" id="loading-msg">Sending to Gemini...</p>
-</div>
+      <div class="block-label">Record audio</div>
+      <div class="record-row">
+        <button class="record-btn" id="record-btn" onclick="toggleRecord()">
+          <span class="dot"></span>
+          <span id="record-btn-label">Start recording</span>
+        </button>
+      </div>
+      <div class="status-text" id="record-status">Click to record from your microphone.</div>
 
-<!-- Results Card -->
-<div class="card" id="results">
-  <h2>Summary</h2>
+      <div class="divider-row">or paste a transcript</div>
 
-  <div class="result-section">
-    <h3>Key Discussion Points</h3>
-    <p id="result-summary"></p>
-  </div>
+      <textarea id="transcript-input" placeholder="Paste your lecture or meeting transcript here..."></textarea>
 
-  <div class="result-section">
-    <h3>Decisions Made</h3>
-    <ul id="result-decisions"></ul>
-  </div>
+      <div class="btn-row">
+        <button class="btn btn-primary" onclick="submitTranscript()">Summarise</button>
+        <button class="btn btn-ghost" onclick="clearInput()">Clear</button>
+      </div>
+    </div>
 
-  <div class="result-section">
-    <h3>Action Items</h3>
-    <ul id="result-actions"></ul>
-  </div>
+    <!-- Loading -->
+    <div class="loading-block" id="loading">
+      <div class="spinner"></div>
+      <p class="loading-msg" id="loading-msg">Sending to Gemini...</p>
+    </div>
 
-  <div class="btn-row">
-    <button class="btn btn-ghost" onclick="resetToInput()">⟵ New Summary</button>
-  </div>
-</div>
+    <!-- Results -->
+    <div id="results">
+      <h1 class="doc-title" id="result-title">Summary</h1>
+      <p class="doc-subtitle" id="result-meta"></p>
 
-<!-- History Card -->
-<div class="card">
-  <h2>Past Sessions</h2>
-  <ul id="history-list"><li style="color:#bbb">No sessions yet.</li></ul>
+      <div class="result-section">
+        <div class="block-label">Key discussion points</div>
+        <p class="body-text" id="result-summary"></p>
+      </div>
+
+      <div class="result-section">
+        <div class="block-label">Decisions made</div>
+        <ul id="result-decisions"></ul>
+      </div>
+
+      <div class="result-section">
+        <div class="block-label">Action items</div>
+        <ul id="result-actions"></ul>
+      </div>
+
+      <div class="result-section" id="transcript-section" style="display:none;">
+        <div class="block-label">Transcript</div>
+        <div class="toggle-block" id="transcript-toggle">
+          <div class="toggle-header" onclick="toggleTranscript()">
+            <span class="toggle-arrow">▸</span>
+            <span>Show full transcript</span>
+          </div>
+          <div class="toggle-body" id="transcript-text"></div>
+        </div>
+      </div>
+
+      <div class="results-footer">
+        <button class="btn btn-ghost" onclick="resetToInput()">← New summary</button>
+      </div>
+    </div>
+
+  </main>
 </div>
 
 <script>
-  // ── State ──────────────────────────────────────────────────────────────────
+  // ── State ──────────────────────────────────────────────────────────────
   let mediaRecorder = null;
   let audioChunks   = [];
   let isRecording   = false;
+  let activeSessionId = null;
 
-  // ── Recording ──────────────────────────────────────────────────────────────
+  // ── Recording ──────────────────────────────────────────────────────────
   async function toggleRecord() {
     if (!isRecording) {
       try {
@@ -258,7 +521,7 @@
 
         mediaRecorder.start();
         isRecording = true;
-        document.getElementById("record-btn").textContent = "⏹ Stop Recording";
+        document.getElementById("record-btn-label").textContent = "Stop recording";
         document.getElementById("record-btn").classList.add("recording");
         setStatus("Recording... click Stop when done.");
       } catch (err) {
@@ -268,7 +531,7 @@
       mediaRecorder.stop();
       mediaRecorder.stream.getTracks().forEach(t => t.stop());
       isRecording = false;
-      document.getElementById("record-btn").textContent = "⏺ Start Recording";
+      document.getElementById("record-btn-label").textContent = "Start recording";
       document.getElementById("record-btn").classList.remove("recording");
     }
   }
@@ -276,10 +539,10 @@
   async function submitAudio(blob) {
     const formData = new FormData();
     formData.append("audio", blob, "recording.webm");
-    await submitToAPI(formData, "Processing audio with Gemini...");
+    await submitToAPI(formData, "Transcribing and summarising audio...");
   }
 
-  // ── Transcript paste ───────────────────────────────────────────────────────
+  // ── Transcript paste ──────────────────────────────────────────────────
   async function submitTranscript() {
     const text = document.getElementById("transcript-input").value.trim();
     if (!text) { alert("Please paste a transcript first."); return; }
@@ -288,61 +551,104 @@
     await submitToAPI(formData, "Summarising transcript...");
   }
 
-  // ── API call ───────────────────────────────────────────────────────────────
+  // ── API call ───────────────────────────────────────────────────────────
   async function submitToAPI(formData, msg) {
     showLoading(msg);
     try {
       const res  = await fetch("/summarise", { method: "POST", body: formData });
       const data = await res.json();
-      if (!res.ok) { alert("Error: " + (data.error || "Unknown error")); hideLoading(); return; }
+      if (!res.ok) { alert("Error: " + (data.error || "Unknown error")); hideLoading(); showInput(); return; }
       showResults(data);
       loadHistory();
     } catch (err) {
       alert("Network error. Is the Flask server running?");
       hideLoading();
+      showInput();
     }
   }
 
-  // ── Render results ─────────────────────────────────────────────────────────
+  // ── Render results ────────────────────────────────────────────────────
   function showResults(data) {
     hideLoading();
+    activeSessionId = data.session_id || data.id || null;
+
     document.getElementById("result-summary").textContent = data.summary;
+
+    const meta = [];
+    if (data.input_type) meta.push(data.input_type === "audio" ? "From recording" : "From pasted transcript");
+    if (data.created_at) meta.push(new Date(data.created_at).toLocaleString());
+    document.getElementById("result-meta").textContent = meta.join(" · ");
 
     const dList = document.getElementById("result-decisions");
     dList.innerHTML = "";
-    (data.decisions || []).forEach(d => {
-      const li = document.createElement("li");
-      li.textContent = d;
-      dList.appendChild(li);
-    });
+    if ((data.decisions || []).length === 0) {
+      dList.innerHTML = '<li class="empty-note" style="list-style:none;padding-left:0;">No decisions identified.</li>';
+    } else {
+      data.decisions.forEach(d => {
+        const li = document.createElement("li");
+        li.textContent = d;
+        dList.appendChild(li);
+      });
+    }
 
     const aList = document.getElementById("result-actions");
     aList.innerHTML = "";
-    (data.action_items || []).forEach(a => {
-      const li = document.createElement("li");
-      li.textContent = a;
-      aList.appendChild(li);
-    });
+    if ((data.action_items || []).length === 0) {
+      aList.innerHTML = '<li class="empty-note" style="list-style:none;padding-left:0;">No action items identified.</li>';
+    } else {
+      data.action_items.forEach(a => {
+        const li = document.createElement("li");
+        li.textContent = a;
+        aList.appendChild(li);
+      });
+    }
 
+    // Transcript toggle block — only shown if a transcript exists
+    const transcriptSection = document.getElementById("transcript-section");
+    const transcriptToggle  = document.getElementById("transcript-toggle");
+    if (data.transcript && data.transcript.trim()) {
+      transcriptSection.style.display = "block";
+      document.getElementById("transcript-text").textContent = data.transcript;
+      transcriptToggle.classList.remove("open"); // collapsed by default
+    } else {
+      transcriptSection.style.display = "none";
+    }
+
+    document.getElementById("input-view").style.display = "none";
     document.getElementById("results").style.display = "block";
-    document.getElementById("results").scrollIntoView({ behavior: "smooth" });
+    window.scrollTo({ top: 0, behavior: "smooth" });
+    highlightActiveHistoryItem();
   }
 
-  // ── History ────────────────────────────────────────────────────────────────
+  function toggleTranscript() {
+    document.getElementById("transcript-toggle").classList.toggle("open");
+  }
+
+  // ── History ───────────────────────────────────────────────────────────
   async function loadHistory() {
     const res  = await fetch("/sessions");
     const data = await res.json();
     const list = document.getElementById("history-list");
-    if (!data.length) { list.innerHTML = '<li style="color:#bbb">No sessions yet.</li>'; return; }
+    if (!data.length) {
+      list.innerHTML = '<li class="history-empty">No sessions yet.</li>';
+      return;
+    }
     list.innerHTML = data.map(s => `
-      <li>
-        <div class="history-item-left" onclick="loadSession(${s.id})">
-          <div class="history-title">${s.summary.substring(0, 80)}...</div>
-          <div class="history-meta">${s.input_type} · ${new Date(s.created_at).toLocaleString()}</div>
+      <li class="history-item" data-id="${s.id}">
+        <span class="doc-icon">📄</span>
+        <div class="history-item-body" onclick="loadSession(${s.id})">
+          <div class="history-title">${escapeHtml(s.summary.substring(0, 60))}${s.summary.length > 60 ? "..." : ""}</div>
+          <div class="history-meta">${new Date(s.created_at).toLocaleDateString()}</div>
         </div>
-        <button class="btn btn-danger" style="padding:4px 10px;font-size:0.8rem"
-          onclick="deleteSession(${s.id})">Delete</button>
+        <button class="history-delete" onclick="event.stopPropagation(); deleteSession(${s.id})">✕</button>
       </li>`).join("");
+    highlightActiveHistoryItem();
+  }
+
+  function highlightActiveHistoryItem() {
+    document.querySelectorAll(".history-item").forEach(el => {
+      el.classList.toggle("active", String(activeSessionId) === el.dataset.id);
+    });
   }
 
   async function loadSession(id) {
@@ -353,18 +659,24 @@
 
   async function deleteSession(id) {
     await fetch(`/sessions/${id}`, { method: "DELETE" });
+    if (activeSessionId === id) resetToInput();
     loadHistory();
   }
 
-  // ── Helpers ────────────────────────────────────────────────────────────────
+  // ── Helpers ───────────────────────────────────────────────────────────
   function showLoading(msg) {
+    document.getElementById("input-view").style.display = "none";
+    document.getElementById("results").style.display = "none";
     document.getElementById("loading").style.display = "block";
     document.getElementById("loading-msg").textContent = msg;
-    document.getElementById("results").style.display  = "none";
   }
 
   function hideLoading() {
     document.getElementById("loading").style.display = "none";
+  }
+
+  function showInput() {
+    document.getElementById("input-view").style.display = "block";
   }
 
   function setStatus(msg) {
@@ -376,11 +688,22 @@
   }
 
   function resetToInput() {
+    activeSessionId = null;
     document.getElementById("results").style.display = "none";
+    document.getElementById("loading").style.display = "none";
+    document.getElementById("input-view").style.display = "block";
+    document.getElementById("transcript-input").value = "";
     window.scrollTo({ top: 0, behavior: "smooth" });
+    highlightActiveHistoryItem();
   }
 
-  // ── Init ───────────────────────────────────────────────────────────────────
+  function escapeHtml(str) {
+    const div = document.createElement("div");
+    div.textContent = str;
+    return div.innerHTML;
+  }
+
+  // ── Init ──────────────────────────────────────────────────────────────
   loadHistory();
 </script>
 

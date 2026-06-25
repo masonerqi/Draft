@@ -18,11 +18,14 @@ def index():
 # ── Summarise ───────────────────────────────────────────────────────────────
 @app.route("/summarise", methods=["POST"])
 def summarise():
+    transcript = None
+
     # Accept either a transcript text or an audio file
     if "transcript" in request.form and request.form["transcript"].strip():
         transcript = request.form["transcript"].strip()
         result = summarise_transcript(transcript)
         filename = "paste"
+        input_type = "transcript"
 
     elif "audio" in request.files:
         audio_file = request.files["audio"]
@@ -31,8 +34,6 @@ def summarise():
         if len(audio_bytes) == 0:
             return jsonify({"error": "Empty audio file received"}), 400
 
-        # Browser MediaRecorder typically sends webm; fall back to its
-        # reported content type if present
         mime_type = audio_file.mimetype or "audio/webm"
 
         try:
@@ -40,20 +41,26 @@ def summarise():
         except Exception as e:
             return jsonify({"error": f"Gemini audio processing failed: {str(e)}"}), 500
 
+        # Gemini returns the transcript inside the result for audio input
+        transcript = result.get("transcript")
+        print("DEBUG RESULT:", result, flush=True)
         filename = audio_file.filename or "recording"
+        input_type = "audio"
 
     else:
         return jsonify({"error": "No transcript or audio provided"}), 400
 
     session_id = save_session(
-        input_type="audio" if "audio" in request.files else "transcript",
+        input_type=input_type,
         filename=filename,
         summary=result["summary"],
         decisions=result["decisions"],
-        action_items=result["action_items"]
+        action_items=result["action_items"],
+        transcript=transcript
     )
 
     result["session_id"] = session_id
+    result["transcript"] = transcript
     return jsonify(result), 200
 
 # ── Sessions ──────────────────────────────────────────────────────────────────
