@@ -6,7 +6,16 @@ from google.genai import types
 
 load_dotenv()
 
-client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
+
+def _resolve_api_key(user_api_key=None):
+    if user_api_key:
+        return user_api_key
+    raise ValueError("No Gemini API key configured. Please provide a user-specific Gemini API key.")
+
+
+def _build_client(user_api_key=None):
+    api_key = _resolve_api_key(user_api_key)
+    return genai.Client(api_key=api_key)
 
 SUMMARY_PROMPT = """
 You are an academic summarisation assistant. Summarise the following transcript
@@ -44,8 +53,9 @@ def _parse_json_response(raw: str) -> dict:
     return json.loads(raw)
 
 
-def summarise_transcript(text: str) -> dict:
+def summarise_transcript(text: str, user_api_key: str | None = None) -> dict:
     prompt = SUMMARY_PROMPT.format(text=text)
+    client = _build_client(user_api_key)
     response = client.models.generate_content(
         model="gemini-2.5-flash",
         contents=prompt
@@ -53,13 +63,15 @@ def summarise_transcript(text: str) -> dict:
     return _parse_json_response(response.text)
 
 
-def summarise_audio(audio_bytes: bytes, mime_type: str = "audio/webm") -> dict:
+def summarise_audio(audio_bytes: bytes, mime_type: str = "audio/webm", user_api_key: str | None = None) -> dict:
     """
     Sends raw audio bytes directly to Gemini for transcription + summarisation
     in a single call. mime_type should match what the browser recorded
     (MediaRecorder default is usually audio/webm).
     """
     audio_part = types.Part.from_bytes(data=audio_bytes, mime_type=mime_type)
+
+    client = _build_client(user_api_key)
 
     response = client.models.generate_content(
         model="gemini-2.5-flash",

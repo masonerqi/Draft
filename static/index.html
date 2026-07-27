@@ -1,711 +1,230 @@
-<!DOCTYPE html>
+﻿<!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="UTF-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-<title>AI Lecture Summariser</title>
-<style>
-  :root {
-    --bg-app: #fbfbfa;
-    --bg-sidebar: #f7f6f3;
-    --bg-hover: #efeeec;
-    --border: #e9e8e4;
-    --text-primary: #37352f;
-    --text-secondary: #787774;
-    --text-tertiary: #a8a6a0;
-    --accent: #2383e2;
-    --accent-soft: #e7f3fe;
-    --danger: #e16259;
-    --danger-soft: #fdecea;
-    --radius: 6px;
-    --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
-    --font-mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
-  }
-
-  * { box-sizing: border-box; margin: 0; padding: 0; }
-
-  body {
-    font-family: var(--font-sans);
-    background: var(--bg-app);
-    color: var(--text-primary);
-    font-size: 15px;
-    line-height: 1.6;
-  }
-
-  .app {
-    display: flex;
-    min-height: 100vh;
-  }
-
-  /* ── Sidebar ────────────────────────────────────────────────────────── */
-  .sidebar {
-    width: 260px;
-    flex-shrink: 0;
-    background: var(--bg-sidebar);
-    border-right: 1px solid var(--border);
-    height: 100vh;
-    position: sticky;
-    top: 0;
-    display: flex;
-    flex-direction: column;
-    overflow-y: auto;
-  }
-
-  .sidebar-header {
-    padding: 16px 14px 10px;
-    display: flex;
-    align-items: center;
-    gap: 8px;
-  }
-
-  .sidebar-header .icon {
-    width: 22px; height: 22px;
-    border-radius: 4px;
-    background: var(--accent);
-    display: flex; align-items: center; justify-content: center;
-    font-size: 13px;
-    flex-shrink: 0;
-  }
-
-  .sidebar-header span {
-    font-weight: 600;
-    font-size: 14px;
-    color: var(--text-primary);
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
-
-  .sidebar-new {
-    margin: 4px 8px 14px;
-    padding: 6px 10px;
-    border-radius: var(--radius);
-    background: transparent;
-    border: none;
-    color: var(--text-secondary);
-    font-size: 13.5px;
-    text-align: left;
-    cursor: pointer;
-    display: flex;
-    align-items: center;
-    gap: 8px;
-  }
-  .sidebar-new:hover { background: var(--bg-hover); color: var(--text-primary); }
-
-  .sidebar-section-label {
-    padding: 4px 14px;
-    font-size: 11.5px;
-    font-weight: 600;
-    color: var(--text-tertiary);
-    text-transform: uppercase;
-    letter-spacing: 0.04em;
-    margin-top: 6px;
-  }
-
-  .history-list {
-    list-style: none;
-    flex: 1;
-    padding: 2px 8px 16px;
-  }
-
-  .history-item {
-    border-radius: var(--radius);
-    padding: 7px 8px;
-    cursor: pointer;
-    margin-bottom: 1px;
-    position: relative;
-    display: flex;
-    align-items: flex-start;
-    gap: 8px;
-  }
-  .history-item:hover { background: var(--bg-hover); }
-  .history-item:hover .history-delete { display: block; }
-  .history-item.active { background: var(--accent-soft); }
-
-  .history-item .doc-icon {
-    font-size: 13px;
-    margin-top: 1px;
-    flex-shrink: 0;
-    color: var(--text-tertiary);
-  }
-
-  .history-item-body { flex: 1; min-width: 0; }
-
-  .history-title {
-    font-size: 13.5px;
-    color: var(--text-primary);
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
-
-  .history-meta {
-    font-size: 11.5px;
-    color: var(--text-tertiary);
-    margin-top: 1px;
-  }
-
-  .history-delete {
-    display: none;
-    background: none;
-    border: none;
-    color: var(--text-tertiary);
-    cursor: pointer;
-    font-size: 13px;
-    padding: 2px 4px;
-    border-radius: 4px;
-    flex-shrink: 0;
-  }
-  .history-delete:hover { background: var(--border); color: var(--danger); }
-
-  .history-empty {
-    padding: 10px 14px;
-    font-size: 13px;
-    color: var(--text-tertiary);
-  }
-
-  /* ── Main content ───────────────────────────────────────────────────── */
-  .main {
-    flex: 1;
-    max-width: 760px;
-    margin: 0 auto;
-    padding: 56px 48px 100px;
-    width: 100%;
-  }
-
-  .doc-title {
-    font-size: 2.1rem;
-    font-weight: 700;
-    margin-bottom: 6px;
-    letter-spacing: -0.01em;
-  }
-
-  .doc-subtitle {
-    color: var(--text-secondary);
-    font-size: 14.5px;
-    margin-bottom: 36px;
-  }
-
-  .block-label {
-    font-size: 11.5px;
-    font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-    color: var(--text-tertiary);
-    margin-bottom: 10px;
-    display: flex;
-    align-items: center;
-    gap: 6px;
-  }
-
-  /* Record control */
-  .record-row {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    margin-bottom: 8px;
-  }
-
-  .record-btn {
-    display: inline-flex;
-    align-items: center;
-    gap: 8px;
-    padding: 8px 16px;
-    border-radius: var(--radius);
-    font-size: 14px;
-    font-weight: 500;
-    cursor: pointer;
-    border: 1px solid var(--border);
-    background: white;
-    color: var(--text-primary);
-    transition: background 0.12s, border-color 0.12s;
-  }
-  .record-btn:hover { background: var(--bg-hover); }
-  .record-btn .dot {
-    width: 8px; height: 8px;
-    border-radius: 50%;
-    background: var(--danger);
-  }
-  .record-btn.recording {
-    border-color: var(--danger);
-    background: var(--danger-soft);
-    color: var(--danger);
-  }
-  .record-btn.recording .dot { animation: pulse 1.1s ease-in-out infinite; }
-
-  @keyframes pulse {
-    0%, 100% { opacity: 1; }
-    50% { opacity: 0.3; }
-  }
-
-  .status-text {
-    font-size: 13px;
-    color: var(--text-tertiary);
-    min-height: 18px;
-    margin-bottom: 28px;
-  }
-
-  .divider-row {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    margin: 28px 0 18px;
-    color: var(--text-tertiary);
-    font-size: 12.5px;
-  }
-  .divider-row::before, .divider-row::after {
-    content: "";
-    flex: 1;
-    height: 1px;
-    background: var(--border);
-  }
-
-  textarea {
-    width: 100%;
-    min-height: 160px;
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    padding: 14px 16px;
-    font-size: 14.5px;
-    line-height: 1.6;
-    resize: vertical;
-    font-family: inherit;
-    color: var(--text-primary);
-    background: white;
-  }
-  textarea::placeholder { color: var(--text-tertiary); }
-  textarea:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
-
-  .btn-row {
-    display: flex;
-    gap: 8px;
-    margin-top: 14px;
-  }
-
-  .btn {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    padding: 7px 14px;
-    border-radius: var(--radius);
-    font-size: 13.5px;
-    font-weight: 500;
-    cursor: pointer;
-    border: 1px solid transparent;
-    transition: opacity 0.12s, background 0.12s;
-  }
-  .btn:disabled { opacity: 0.5; cursor: not-allowed; }
-
-  .btn-primary { background: var(--accent); color: white; }
-  .btn-primary:hover { opacity: 0.88; }
-
-  .btn-ghost { background: transparent; color: var(--text-secondary); border-color: var(--border); }
-  .btn-ghost:hover { background: var(--bg-hover); }
-
-  /* Loading state */
-  .loading-block {
-    display: none;
-    padding: 32px 0;
-    text-align: center;
-  }
-  .spinner {
-    width: 22px; height: 22px;
-    border: 2.5px solid var(--border);
-    border-top-color: var(--accent);
-    border-radius: 50%;
-    animation: spin 0.7s linear infinite;
-    margin: 0 auto 12px;
-  }
-  @keyframes spin { to { transform: rotate(360deg); } }
-  .loading-msg { font-size: 13.5px; color: var(--text-tertiary); }
-
-  /* Results */
-  #results { display: none; }
-
-  .result-section { margin-bottom: 30px; }
-
-  .result-section .body-text {
-    font-size: 15px;
-    line-height: 1.7;
-    color: var(--text-primary);
-  }
-
-  .result-section ul {
-    padding-left: 0;
-    list-style: none;
-  }
-  .result-section ul li {
-    font-size: 15px;
-    line-height: 1.65;
-    padding: 3px 0 3px 22px;
-    position: relative;
-  }
-  .result-section ul li::before {
-    content: "•";
-    position: absolute;
-    left: 6px;
-    color: var(--text-tertiary);
-  }
-
-  .empty-note {
-    font-size: 13.5px;
-    color: var(--text-tertiary);
-    font-style: italic;
-  }
-
-  /* Transcript toggle block (Notion-style disclosure) */
-  .toggle-block {
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    background: white;
-  }
-  .toggle-header {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    padding: 11px 14px;
-    cursor: pointer;
-    font-size: 13.5px;
-    font-weight: 500;
-    color: var(--text-secondary);
-    user-select: none;
-  }
-  .toggle-header:hover { color: var(--text-primary); }
-  .toggle-arrow {
-    display: inline-block;
-    transition: transform 0.15s;
-    font-size: 11px;
-    color: var(--text-tertiary);
-  }
-  .toggle-block.open .toggle-arrow { transform: rotate(90deg); }
-  .toggle-body {
-    display: none;
-    padding: 0 16px 16px 38px;
-    font-size: 14px;
-    line-height: 1.7;
-    color: var(--text-secondary);
-    white-space: pre-wrap;
-    border-top: 1px solid var(--border);
-    margin-top: 0;
-    padding-top: 14px;
-  }
-  .toggle-block.open .toggle-body { display: block; }
-
-  .results-footer {
-    margin-top: 36px;
-    padding-top: 20px;
-    border-top: 1px solid var(--border);
-  }
-
-  @media (max-width: 720px) {
-    .sidebar { display: none; }
-    .main { padding: 32px 20px 80px; }
-  }
-</style>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Draft • AI Meeting Summarizer</title>
+  <link rel="stylesheet" href="/static/style.css" />
+  <script src="https://unpkg.com/lucide@latest"></script>
 </head>
 <body>
+  <div class="auth-view" id="auth-view">
+    <div class="auth-card">
+      <h1>Welcome back</h1>
+      <p>Login or create an account to store your meeting summaries and manage your Gemini API key.</p>
 
-<div class="app">
+      <div class="auth-tab-row">
+        <button type="button" class="auth-tab active" id="login-tab">Login</button>
+        <button type="button" class="auth-tab" id="register-tab">Register</button>
+      </div>
 
-  <!-- ── Sidebar ── -->
-  <nav class="sidebar">
-    <div class="sidebar-header">
-      <div class="icon">🎓</div>
-      <span>Lecture Summariser</span>
+      <div class="auth-error" id="auth-error"></div>
+
+      <div class="auth-field">
+        <label for="auth-username">Username</label>
+        <input id="auth-username" type="text" autocomplete="username" />
+      </div>
+      <div class="auth-field">
+        <label for="auth-password">Password</label>
+        <input id="auth-password" type="password" autocomplete="current-password" />
+      </div>
+      <button type="button" class="button" id="auth-submit">Login</button>
     </div>
+  </div>
 
-    <button class="sidebar-new" onclick="resetToInput()">
-      <span>＋</span> New summary
-    </button>
+  <div class="app-shell hidden" id="app-shell">
+    <aside class="sidebar">
+      <div class="sidebar-top">
+        <div class="brand">
+          <i data-lucide="file-text"></i>
+          <span>Draft</span>
+        </div>
 
-    <div class="sidebar-section-label">Past sessions</div>
-    <ul class="history-list" id="history-list">
-      <li class="history-empty">No sessions yet.</li>
-    </ul>
-  </nav>
+        <button type="button" class="sidebar-button" id="new-session-btn">
+          <i data-lucide="plus"></i>
+          <span>New summary</span>
+        </button>
 
-  <!-- ── Main ── -->
-  <main class="main">
+        <div class="sidebar-section">
+          <div class="sidebar-label">EXPLORE</div>
+          <button type="button" class="nav-item nav-item-record active" id="nav-record-btn">
+            <i data-lucide="mic"></i>
+            <span>Quick Record</span>
+          </button>
+          <button type="button" class="nav-item nav-item-disabled" id="nav-import-btn" aria-disabled="true" disabled>
+            <i data-lucide="file-text"></i>
+            <span>Import</span>
+            <span class="badge-red">Coming Soon</span>
+          </button>
+        </div>
 
-    <!-- Input view -->
-    <div id="input-view">
-      <h1 class="doc-title">New summary</h1>
-      <p class="doc-subtitle">Record a lecture or paste a transcript to generate a structured summary.</p>
+        <div class="sidebar-section">
+          <div class="sidebar-label">PAST SESSIONS</div>
+          <ul class="history-list" id="history-list">
+            <li class="history-empty">No sessions yet.</li>
+          </ul>
+        </div>
+      </div>
 
-      <div class="block-label">Record audio</div>
-      <div class="record-row">
-        <button class="record-btn" id="record-btn" onclick="toggleRecord()">
-          <span class="dot"></span>
-          <span id="record-btn-label">Start recording</span>
+      <div class="sidebar-footer">
+        <div class="profile-card">
+          <div class="profile-avatar" id="profile-initials">D</div>
+          <div>
+            <div class="profile-name" id="profile-name">Guest</div>
+            <div class="profile-email" id="profile-email">Not signed in</div>
+          </div>
+        </div>
+        <div class="footer-actions">
+          <button type="button" class="icon-button" id="settings-btn" title="API Key settings">
+            <i data-lucide="key"></i>
+          </button>
+          <button type="button" class="icon-button" id="logout-btn" title="Logout">
+            <i data-lucide="log-out"></i>
+          </button>
+        </div>
+      </div>
+    </aside>
+
+    <main class="main-content">
+      <header class="topbar">
+        <div>
+          <div class="page-title">Meeting Summaries</div>
+          <p class="page-copy">Generate crisp, searchable summaries of lectures and meetings. Everything is stored per user and tied to your personal Gemini key.</p>
+        </div>
+        <div class="header-actions">
+          <button type="button" class="button-secondary text-button" id="copy-btn">
+            <i data-lucide="copy"></i>
+            Copy Transcript
+          </button>
+        </div>
+      </header>
+
+      <section class="panel" id="input-view">
+        <div class="section-title">
+          <div>
+            <h2>Capture or paste a transcript</h2>
+            <p>Use the recorder or paste your notes to generate a refined meeting summary.</p>
+          </div>
+          <div class="status-pill" id="record-status-indicator">
+            <span class="status-dot"></span>
+            <span id="record-status-text">Ready</span>
+            <span class="live-badge hidden" id="live-badge">Live</span>
+          </div>
+        </div>
+
+        <textarea class="transcription-textarea" id="transcript-input" placeholder="Type your notes or record live audio from the mic."></textarea>
+
+        <div class="action-row">
+          <button type="button" class="button-secondary text-button" id="clear-input-btn">
+            <i data-lucide="refresh-cw"></i>
+            Clear
+          </button>
+          <button type="button" class="button" id="submit-transcript-btn">
+            <i data-lucide="sparkles"></i>
+            Summarize
+          </button>
+        </div>
+      </section>
+
+      <section class="panel hidden" id="results">
+        <div class="error-banner" id="error-banner"></div>
+
+        <div class="section-title">
+          <div>
+            <h2>Summary Analysis</h2>
+            <p id="result-meta"></p>
+          </div>
+        </div>
+
+        <div class="result-grid">
+          <div class="result-card">
+            <h3>Key Discussion Points</h3>
+            <p id="result-summary"></p>
+          </div>
+          <div class="result-card">
+            <h3>Decisions Made</h3>
+            <ul id="result-decisions"></ul>
+          </div>
+          <div class="result-card">
+            <h3>Action Items</h3>
+            <ul id="result-actions"></ul>
+          </div>
+          <div class="result-card hidden" id="transcript-section">
+            <h3>Full Text Archive</h3>
+            <div class="toggle-block" id="transcript-toggle" onclick="toggleTranscript()">
+              <div class="toggle-header">
+                <span>Show raw transcript</span>
+                <i data-lucide="chevron-right"></i>
+              </div>
+            </div>
+            <div class="toggle-body" id="transcript-text"></div>
+          </div>
+        </div>
+
+        <div class="action-row">
+          <button type="button" class="button-secondary text-button" id="return-to-recorder-btn">
+            <i data-lucide="chevron-left"></i>
+            Return to Recorder
+          </button>
+          <button type="button" class="button-secondary text-button" id="exportTextBtn">
+            <i data-lucide="download"></i>
+            Export as .txt
+          </button>
+        </div>
+      </section>
+
+      <div class="control-dock-wrapper" id="floating-dock-row">
+        <div class="control-dock">
+          <button type="button" class="dock-record-trigger" id="dock-record-btn" title="Toggle Mic Recording Mode"></button>
+          <div class="dock-timer" id="dock-timer-display">0:00</div>
+          <div class="dock-audio-wave">
+            <div class="wave-bar"></div>
+            <div class="wave-bar"></div>
+            <div class="wave-bar"></div>
+            <div class="wave-bar"></div>
+          </div>
+        </div>
+      </div>
+    </main>
+  </div>
+
+  <div class="loading-overlay hidden" id="loading">
+    <div class="loading-panel">
+      <div class="spinner"></div>
+      <p class="loading-msg" id="loading-msg">Sending to Gemini Engine...</p>
+    </div>
+  </div>
+
+  <div class="modal hidden" id="settings-modal">
+    <div class="modal-panel">
+      <div class="modal-header">
+        <div>
+          <h2>Gemini API Key</h2>
+          <p>Store a personal Google AI Studio API key so your summary requests use your own account.</p>
+        </div>
+        <button type="button" class="icon-button" id="settings-close-btn" aria-label="Close settings">
+          <i data-lucide="x"></i>
         </button>
       </div>
-      <div class="status-text" id="record-status">Click to record from your microphone.</div>
-
-      <div class="divider-row">or paste a transcript</div>
-
-      <textarea id="transcript-input" placeholder="Paste your lecture or meeting transcript here..."></textarea>
-
-      <div class="btn-row">
-        <button class="btn btn-primary" onclick="submitTranscript()">Summarise</button>
-        <button class="btn btn-ghost" onclick="clearInput()">Clear</button>
-      </div>
-    </div>
-
-    <!-- Loading -->
-    <div class="loading-block" id="loading">
-      <div class="spinner"></div>
-      <p class="loading-msg" id="loading-msg">Sending to Gemini...</p>
-    </div>
-
-    <!-- Results -->
-    <div id="results">
-      <h1 class="doc-title" id="result-title">Summary</h1>
-      <p class="doc-subtitle" id="result-meta"></p>
-
-      <div class="result-section">
-        <div class="block-label">Key discussion points</div>
-        <p class="body-text" id="result-summary"></p>
-      </div>
-
-      <div class="result-section">
-        <div class="block-label">Decisions made</div>
-        <ul id="result-decisions"></ul>
-      </div>
-
-      <div class="result-section">
-        <div class="block-label">Action items</div>
-        <ul id="result-actions"></ul>
-      </div>
-
-      <div class="result-section" id="transcript-section" style="display:none;">
-        <div class="block-label">Transcript</div>
-        <div class="toggle-block" id="transcript-toggle">
-          <div class="toggle-header" onclick="toggleTranscript()">
-            <span class="toggle-arrow">▸</span>
-            <span>Show full transcript</span>
-          </div>
-          <div class="toggle-body" id="transcript-text"></div>
+      <div class="modal-body">
+        <div class="modal-field">
+          <label for="api-key-input">Gemini API key</label>
+          <input id="api-key-input" type="text" autocomplete="off" placeholder="Paste your Gemini API key here" />
         </div>
+        <p>Get your free API key from <a href="https://studio.google.com/" target="_blank" rel="noopener">Google AI Studio</a>.</p>
+        <div class="auth-error" id="settings-error"></div>
+        <p class="empty-note" id="settings-status"></p>
       </div>
-
-      <div class="results-footer">
-        <button class="btn btn-ghost" onclick="resetToInput()">← New summary</button>
+      <div class="modal-footer">
+        <button type="button" class="button" id="settings-save-btn">
+          <i data-lucide="save"></i>
+          Save key
+        </button>
       </div>
     </div>
+  </div>
 
-  </main>
-</div>
-
-<script>
-  // ── State ──────────────────────────────────────────────────────────────
-  let mediaRecorder = null;
-  let audioChunks   = [];
-  let isRecording   = false;
-  let activeSessionId = null;
-
-  // ── Recording ──────────────────────────────────────────────────────────
-  async function toggleRecord() {
-    if (!isRecording) {
-      try {
-        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-        mediaRecorder = new MediaRecorder(stream);
-        audioChunks   = [];
-
-        mediaRecorder.ondataavailable = e => audioChunks.push(e.data);
-
-        mediaRecorder.onstop = async () => {
-          const blob = new Blob(audioChunks, { type: "audio/webm" });
-          setStatus("Recording captured. Submitting to Gemini...");
-          await submitAudio(blob);
-        };
-
-        mediaRecorder.start();
-        isRecording = true;
-        document.getElementById("record-btn-label").textContent = "Stop recording";
-        document.getElementById("record-btn").classList.add("recording");
-        setStatus("Recording... click Stop when done.");
-      } catch (err) {
-        setStatus("Microphone access denied. Please allow microphone access.");
-      }
-    } else {
-      mediaRecorder.stop();
-      mediaRecorder.stream.getTracks().forEach(t => t.stop());
-      isRecording = false;
-      document.getElementById("record-btn-label").textContent = "Start recording";
-      document.getElementById("record-btn").classList.remove("recording");
-    }
-  }
-
-  async function submitAudio(blob) {
-    const formData = new FormData();
-    formData.append("audio", blob, "recording.webm");
-    await submitToAPI(formData, "Transcribing and summarising audio...");
-  }
-
-  // ── Transcript paste ──────────────────────────────────────────────────
-  async function submitTranscript() {
-    const text = document.getElementById("transcript-input").value.trim();
-    if (!text) { alert("Please paste a transcript first."); return; }
-    const formData = new FormData();
-    formData.append("transcript", text);
-    await submitToAPI(formData, "Summarising transcript...");
-  }
-
-  // ── API call ───────────────────────────────────────────────────────────
-  async function submitToAPI(formData, msg) {
-    showLoading(msg);
-    try {
-      const res  = await fetch("/summarise", { method: "POST", body: formData });
-      const data = await res.json();
-      if (!res.ok) { alert("Error: " + (data.error || "Unknown error")); hideLoading(); showInput(); return; }
-      showResults(data);
-      loadHistory();
-    } catch (err) {
-      alert("Network error. Is the Flask server running?");
-      hideLoading();
-      showInput();
-    }
-  }
-
-  // ── Render results ────────────────────────────────────────────────────
-  function showResults(data) {
-    hideLoading();
-    activeSessionId = data.session_id || data.id || null;
-
-    document.getElementById("result-summary").textContent = data.summary;
-
-    const meta = [];
-    if (data.input_type) meta.push(data.input_type === "audio" ? "From recording" : "From pasted transcript");
-    if (data.created_at) meta.push(new Date(data.created_at).toLocaleString());
-    document.getElementById("result-meta").textContent = meta.join(" · ");
-
-    const dList = document.getElementById("result-decisions");
-    dList.innerHTML = "";
-    if ((data.decisions || []).length === 0) {
-      dList.innerHTML = '<li class="empty-note" style="list-style:none;padding-left:0;">No decisions identified.</li>';
-    } else {
-      data.decisions.forEach(d => {
-        const li = document.createElement("li");
-        li.textContent = d;
-        dList.appendChild(li);
-      });
-    }
-
-    const aList = document.getElementById("result-actions");
-    aList.innerHTML = "";
-    if ((data.action_items || []).length === 0) {
-      aList.innerHTML = '<li class="empty-note" style="list-style:none;padding-left:0;">No action items identified.</li>';
-    } else {
-      data.action_items.forEach(a => {
-        const li = document.createElement("li");
-        li.textContent = a;
-        aList.appendChild(li);
-      });
-    }
-
-    // Transcript toggle block — only shown if a transcript exists
-    const transcriptSection = document.getElementById("transcript-section");
-    const transcriptToggle  = document.getElementById("transcript-toggle");
-    if (data.transcript && data.transcript.trim()) {
-      transcriptSection.style.display = "block";
-      document.getElementById("transcript-text").textContent = data.transcript;
-      transcriptToggle.classList.remove("open"); // collapsed by default
-    } else {
-      transcriptSection.style.display = "none";
-    }
-
-    document.getElementById("input-view").style.display = "none";
-    document.getElementById("results").style.display = "block";
-    window.scrollTo({ top: 0, behavior: "smooth" });
-    highlightActiveHistoryItem();
-  }
-
-  function toggleTranscript() {
-    document.getElementById("transcript-toggle").classList.toggle("open");
-  }
-
-  // ── History ───────────────────────────────────────────────────────────
-  async function loadHistory() {
-    const res  = await fetch("/sessions");
-    const data = await res.json();
-    const list = document.getElementById("history-list");
-    if (!data.length) {
-      list.innerHTML = '<li class="history-empty">No sessions yet.</li>';
-      return;
-    }
-    list.innerHTML = data.map(s => `
-      <li class="history-item" data-id="${s.id}">
-        <span class="doc-icon">📄</span>
-        <div class="history-item-body" onclick="loadSession(${s.id})">
-          <div class="history-title">${escapeHtml(s.summary.substring(0, 60))}${s.summary.length > 60 ? "..." : ""}</div>
-          <div class="history-meta">${new Date(s.created_at).toLocaleDateString()}</div>
-        </div>
-        <button class="history-delete" onclick="event.stopPropagation(); deleteSession(${s.id})">✕</button>
-      </li>`).join("");
-    highlightActiveHistoryItem();
-  }
-
-  function highlightActiveHistoryItem() {
-    document.querySelectorAll(".history-item").forEach(el => {
-      el.classList.toggle("active", String(activeSessionId) === el.dataset.id);
-    });
-  }
-
-  async function loadSession(id) {
-    const res  = await fetch(`/sessions/${id}`);
-    const data = await res.json();
-    showResults(data);
-  }
-
-  async function deleteSession(id) {
-    await fetch(`/sessions/${id}`, { method: "DELETE" });
-    if (activeSessionId === id) resetToInput();
-    loadHistory();
-  }
-
-  // ── Helpers ───────────────────────────────────────────────────────────
-  function showLoading(msg) {
-    document.getElementById("input-view").style.display = "none";
-    document.getElementById("results").style.display = "none";
-    document.getElementById("loading").style.display = "block";
-    document.getElementById("loading-msg").textContent = msg;
-  }
-
-  function hideLoading() {
-    document.getElementById("loading").style.display = "none";
-  }
-
-  function showInput() {
-    document.getElementById("input-view").style.display = "block";
-  }
-
-  function setStatus(msg) {
-    document.getElementById("record-status").textContent = msg;
-  }
-
-  function clearInput() {
-    document.getElementById("transcript-input").value = "";
-  }
-
-  function resetToInput() {
-    activeSessionId = null;
-    document.getElementById("results").style.display = "none";
-    document.getElementById("loading").style.display = "none";
-    document.getElementById("input-view").style.display = "block";
-    document.getElementById("transcript-input").value = "";
-    window.scrollTo({ top: 0, behavior: "smooth" });
-    highlightActiveHistoryItem();
-  }
-
-  function escapeHtml(str) {
-    const div = document.createElement("div");
-    div.textContent = str;
-    return div.innerHTML;
-  }
-
-  // ── Init ──────────────────────────────────────────────────────────────
-  loadHistory();
-</script>
-
+  <script src="/static/app.js" defer></script>
+  <script>lucide.createIcons();</script>
 </body>
 </html>

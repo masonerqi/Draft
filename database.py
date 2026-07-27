@@ -1,13 +1,24 @@
+import os
 import sqlite3
 import json
 from datetime import datetime
+from werkzeug.security import generate_password_hash, check_password_hash
 
-DB_PATH = "sessions.db"
+DB_PATH = os.path.join(os.path.dirname(__file__), "sessions.db")
 
 
 def init_db():
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS users (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            username TEXT UNIQUE NOT NULL,
+            password_hash TEXT NOT NULL,
+            gemini_api_key TEXT,
+            created_at DATETIME NOT NULL
+        )
+    """)
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS sessions (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -17,31 +28,41 @@ def init_db():
             transcript TEXT,
             summary TEXT,
             decisions TEXT,
-            action_items TEXT
+            action_items TEXT,
+            user_id INTEGER,
+            FOREIGN KEY(user_id) REFERENCES users(id)
         )
     """)
     conn.commit()
 
-    # Lightweight migration for existing databases created before this
-    # column existed — safe to run every startup, no-op if already present.
+    cursor.execute("PRAGMA table_info(users)")
+    user_columns = [row[1] for row in cursor.fetchall()]
+    if "gemini_api_key" not in user_columns:
+        cursor.execute("ALTER TABLE users ADD COLUMN gemini_api_key TEXT")
+        conn.commit()
+
     cursor.execute("PRAGMA table_info(sessions)")
     columns = [row[1] for row in cursor.fetchall()]
     if "transcript" not in columns:
         cursor.execute("ALTER TABLE sessions ADD COLUMN transcript TEXT")
         conn.commit()
+        columns.append("transcript")
+    if "user_id" not in columns:
+        cursor.execute("ALTER TABLE sessions ADD COLUMN user_id INTEGER")
+        conn.commit()
 
     conn.close()
 
 
-def save_session(input_type, filename, summary, decisions, action_items, transcript=None):
+def save_session(input_type, filename, summary, decisions, action_items, transcript=None, user_id=None):
     decisions = decisions if decisions is not None else []
     action_items = action_items if action_items is not None else []
 
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     cursor.execute("""
-        INSERT INTO sessions (created_at, input_type, filename, transcript, summary, decisions, action_items)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO sessions (created_at, input_type, filename, transcript, summary, decisions, action_items, user_id)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     """, (
         datetime.now().isoformat(),
         input_type,
@@ -49,7 +70,8 @@ def save_session(input_type, filename, summary, decisions, action_items, transcr
         transcript,
         summary,
         json.dumps(decisions),
-        json.dumps(action_items)
+        json.dumps(action_items),
+        user_id
     ))
     conn.commit()
     session_id = cursor.lastrowid
@@ -57,10 +79,18 @@ def save_session(input_type, filename, summary, decisions, action_items, transcr
     return session_id
 
 
-def get_all_sessions():
+def get_all_sessions(user_id=None):
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
-    cursor.execute("SELECT id, created_at, input_type, filename, summary FROM sessions ORDER BY created_at DESC")
+    if user_id is not None:
+        cursor.execute(
+            "SELECT id, created_at, input_type, filename, summary FROM sessions WHERE user_id = ? ORDER BY created_at DESC",
+            (user_id,)
+        )
+    else:
+        cursor.execute(
+            "SELECT id, created_at, input_type, filename, summary FROM sessions ORDER BY created_at DESC"
+        )
     rows = cursor.fetchall()
     conn.close()
     return [
@@ -69,24 +99,27 @@ def get_all_sessions():
     ]
 
 
-def get_session_by_id(session_id):
+def get_session_by_id(session_id, user_id=None):
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     
-    # Explicitly define the column order in the query
-    cursor.execute("""
-        SELECT id, created_at, input_type, filename, transcript, summary, decisions, action_items 
-        FROM sessions 
+    query = """
+        SELECT id, created_at, input_type, filename, transcript, summary, decisions, action_items, user_id
+        FROM sessions
         WHERE id = ?
-    """, (session_id,))
-    
+    """
+    params = [session_id]
+    if user_id is not None:
+        query += " AND user_id = ?"
+        params.append(user_id)
+
+    cursor.execute(query, tuple(params))
     row = cursor.fetchone()
     conn.close()
     
     if not row:
         return None
         
-    # Helper to safely parse JSON strings
     def safe_json_loads(data):
         if not data or not str(data).strip():
             return []
@@ -95,7 +128,6 @@ def get_session_by_id(session_id):
         except json.JSONDecodeError:
             return []
 
-    # Now the indexes will ALWAYS match this exact query's order
     return {
         "id": row[0],
         "created_at": row[1],
@@ -104,13 +136,81 @@ def get_session_by_id(session_id):
         "transcript": row[4],
         "summary": row[5],
         "decisions": safe_json_loads(row[6]),
-        "action_items": safe_json_loads(row[7])
+        "action_items": safe_json_loads(row[7]),
+        "user_id": row[8]
     }
 
 
-def delete_session(session_id):
+def delete_session(session_id, user_id=None):
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
-    cursor.execute("DELETE FROM sessions WHERE id = ?", (session_id,))
+    if user_id is not None:
+        cursor.execute("DELETE FROM sessions WHERE id = ? AND user_id = ?", (session_id, user_id))
+    else:
+        cursor.execute("DELETE FROM sessions WHERE id = ?", (session_id,))
     conn.commit()
     conn.close()
+
+
+def create_user(username, password):
+    password_hash = generate_password_hash(password)
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute(
+        "INSERT INTO users (username, password_hash, created_at) VALUES (?, ?, ?)",
+        (username, password_hash, datetime.now().isoformat())
+    )
+    conn.commit()
+    user_id = cursor.lastrowid
+    conn.close()
+    return user_id
+
+
+def get_user_by_username(username):
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute("SELECT id, username, password_hash, created_at FROM users WHERE username = ?", (username,))
+    row = cursor.fetchone()
+    conn.close()
+    if not row:
+        return None
+    return {"id": row[0], "username": row[1], "password_hash": row[2], "created_at": row[3]}
+
+
+def get_user_api_key(user_id):
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute("SELECT gemini_api_key FROM users WHERE id = ?", (user_id,))
+    row = cursor.fetchone()
+    conn.close()
+    if not row:
+        return None
+    return row[0]
+
+
+def set_user_api_key(user_id, api_key):
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute("UPDATE users SET gemini_api_key = ? WHERE id = ?", (api_key, user_id))
+    conn.commit()
+    conn.close()
+
+
+def get_user_by_id(user_id):
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute("SELECT id, username, password_hash, created_at FROM users WHERE id = ?", (user_id,))
+    row = cursor.fetchone()
+    conn.close()
+    if not row:
+        return None
+    return {"id": row[0], "username": row[1], "password_hash": row[2], "created_at": row[3]}
+
+
+def authenticate_user(username, password):
+    user = get_user_by_username(username)
+    if not user:
+        return None
+    if not check_password_hash(user["password_hash"], password):
+        return None
+    return user
