@@ -4,10 +4,15 @@ import json
 from datetime import datetime
 from werkzeug.security import generate_password_hash, check_password_hash
 
-DB_PATH = os.path.join(os.path.dirname(__file__), "sessions.db")
+DB_PATH = os.environ.get("DATABASE_PATH")
+if not DB_PATH:
+    DB_PATH = os.path.join(os.path.dirname(__file__), "sessions.db")
 
 
 def init_db():
+    db_dir = os.path.dirname(DB_PATH)
+    if db_dir and not os.path.exists(db_dir):
+        os.makedirs(db_dir, exist_ok=True)
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     cursor.execute("""
