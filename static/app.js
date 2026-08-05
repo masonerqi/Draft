@@ -361,7 +361,7 @@ async function loadHistory() {
     }
     const data = await res.json();
     state.sessions = Array.isArray(data) ? data : [];
-    renderSessionList(elements.historyList, state.sessions, "No notes yet. Start your first recording when you are ready.");
+    renderSessionList(elements.historyList, state.sessions.slice(0, 3), "No notes yet. Start your first recording when you are ready.");
     renderSessionList(elements.searchResultsList, state.sessions, "No matching notes found.");
   } catch (e) {
     console.warn("History unreachable.", e);

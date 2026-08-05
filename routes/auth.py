@@ -1,9 +1,8 @@
-from flask import Blueprint, session, jsonify, render_template, request
+from flask import Blueprint, session, jsonify, render_template, request, redirect, url_for
 from routes.utils import _parse_request_payload, get_current_user, login_required, _mask_api_key
 from database import create_user, authenticate_user, get_user_by_username, get_user_api_key, set_user_api_key, create_or_get_user_from_firebase
-from firebase_admin import auth
 
-# Import firebase auth; if not installed, handle gracefully
+# Import firebase auth gracefully
 try:
     import firebase_admin
     from firebase_admin import auth as firebase_auth
@@ -18,20 +17,38 @@ def login_page():
     return render_template('auth.html')
 
 
-@auth_bp.route("/register", methods=["POST"])
+@auth_bp.route("/register", methods=["GET", "POST"])
 def register():
+    # 1. Handle browser GET request (rendering the register view)
+    if request.method == "GET":
+        return render_template("auth.html", show_register=True)
+
+    # 2. Handle POST request (Form submission or API JSON)
     payload = _parse_request_payload()
-    username = (payload.get("username") or "").strip()
+    
+    # Check for email first, then fall back to username
+    identifier = (payload.get("email") or payload.get("username") or "").strip()
     password = (payload.get("password") or "").strip()
-    if not username or not password:
-        return jsonify({"error": "Username and password are required"}), 400
 
-    if get_user_by_username(username):
-        return jsonify({"error": "Username already exists"}), 400
+    if not identifier or not password:
+        if request.form:
+            return render_template("auth.html", show_register=True, register_error="Email and password are required.")
+        return jsonify({"error": "Email and password are required"}), 400
 
-    user_id = create_user(username, password)
+    if get_user_by_username(identifier):
+        if request.form:
+            return render_template("auth.html", show_register=True, register_error="An account with this email already exists.")
+        return jsonify({"error": "Account already exists"}), 400
+
+    user_id = create_user(identifier, password)
     session["user_id"] = user_id
-    return jsonify({"id": user_id, "username": username}), 201
+
+    # If submitted via standard HTML form, redirect directly into the main app dashboard
+    if request.form:
+        return redirect(url_for("main_bp.index"))
+
+    # If submitted via AJAX/JSON API
+    return jsonify({"id": user_id, "username": identifier}), 201
 
 
 @auth_bp.route("/login", methods=["POST"])
@@ -104,22 +121,19 @@ def update_user_settings():
 
 @auth_bp.route("/forgot-password", methods=["POST"])
 def forgot_password():
-    data = request.get_json()
+    data = request.get_json() or {}
     email = data.get("email")
 
     if not email:
         return jsonify({"message": "Email is required"}), 400
 
     try:
-        # Generate the password reset link via Firebase Admin SDK
-        link = auth.generate_password_reset_link(email)
-
-        # TODO: Send `link` to the user via your custom email service (SendGrid, Flask-Mail, etc.)
+        if not firebase_auth:
+            return jsonify({"message": "Firebase Admin SDK is not available."}), 500
+            
+        link = firebase_auth.generate_password_reset_link(email)
         print(f"Generated Reset Link for {email}: {link}")
 
-        return (
-            jsonify({"message": "Password reset instructions sent to your email."}),
-            200,
-        )
+        return jsonify({"message": "Password reset instructions sent to your email."}), 200
     except Exception as e:
         return jsonify({"message": f"Error generating link: {str(e)}"}), 400

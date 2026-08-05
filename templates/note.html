@@ -1,0 +1,25 @@
+<section class="card transcript-card hidden" id="input-view">
+  <div class="transcript-header">
+    <div>
+      <h2>Capture or paste a transcript</h2>
+      <p class="text-muted">Use the recorder or paste your notes to generate a refined meeting summary.</p>
+    </div>
+    <div class="status-badge ready" id="record-status-indicator">
+      <span class="dot"></span>
+      <span id="record-status-text">Ready</span>
+      <span class="live-badge hidden" id="live-badge">Live</span>
+    </div>
+  </div>
+  <textarea class="transcription-textarea" id="transcript-input" placeholder="Type your notes or record live audio from the mic."></textarea>
+  <div class="action-row">
+    <button type="button" class="btn-outline" id="clear-input-btn"><i data-lucide="refresh-cw"></i>Clear</button>
+    <button type="button" class="btn-primary" id="submit-transcript-btn"><i data-lucide="sparkles"></i>Summarize</button>
+  </div>
+</section>
+<div class="control-dock-wrapper" id="floating-dock-row">
+  <div class="control-dock">
+    <button type="button" class="dock-record-trigger" id="dock-record-btn" title="Toggle Mic Recording Mode"></button>
+    <div class="dock-timer" id="dock-timer-display">0:00</div>
+    <div class="dock-audio-wave"><div class="wave-bar"></div><div class="wave-bar"></div><div class="wave-bar"></div><div class="wave-bar"></div></div>
+  </div>
+</div>

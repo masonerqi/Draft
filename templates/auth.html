@@ -1,54 +1,70 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Login / Register - Draft</title>
-    <link rel="stylesheet" href="/static/css/main.css" />
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>{% if show_register %}Register{% else %}Sign in{% endif %} · Draft</title>
+  <link rel="stylesheet" href="/static/css/main.css?v=3" />
 </head>
 <body>
+  <main class="auth-wrapper">
+    <section class="card card--auth animate-fade-up">
+      <img src="{{ url_for('static', filename='images/draft_logo.png') }}" alt="Draft" class="auth-logo" />
 
-<div class="auth-wrapper">
-  <div class="card card--auth animate-fade-up">
-    <img src="{{ url_for('static', filename='images/draft_logo.png') }}" alt="Logo" style="height: 40px; margin-bottom: 16px;">
+      {% if show_register %}
+        <h1>Create your account</h1>
+        <p class="auth-intro">Save, search, and revisit your meeting summaries.</p>
 
-    <h2 id="form-title">Sign In</h2>
+        <form method="POST" action="{{ url_for('auth.register') }}" id="register-form">
+          <div class="form-group">
+            <label for="reg-email">Email</label>
+            <input type="email" id="reg-email" name="email" placeholder="you@example.com" autocomplete="email" required />
+          </div>
 
-    <form id="auth-form">
-      <div class="form-group">
-        <label for="email">Email</label>
-        <input type="email" id="email" name="email" placeholder="you@example.com" required>
-      </div>
+          <div class="form-group">
+            <label for="reg-password">Password</label>
+            <input type="password" id="reg-password" name="password" placeholder="Choose a password" autocomplete="new-password" minlength="6" required />
+          </div>
 
-      <div class="form-group">
-        <label for="password">Password</label>
-        <input type="password" id="password" name="password" placeholder="••••••••" required>
-      </div>
+          <button type="submit" class="btn-primary">Create account</button>
+          <p class="auth-switch">Already have an account? <a href="{{ url_for('auth.login_page') }}">Sign in</a></p>
 
-      <button type="submit" class="btn-primary" id="submit-btn">Sign In</button>
+          {% if register_error %}
+            <p class="auth-message error" role="alert">{{ register_error }}</p>
+          {% endif %}
+        </form>
+      {% else %}
+        <h1>Welcome back</h1>
+        <p class="auth-intro">Sign in to continue to your meeting workspace.</p>
 
-      <div class="auth-footer-links" style="display: flex; justify-content: space-between; align-items: center; margin-top: 16px; font-size: 0.85rem;">
-        <a href="#" id="forgot-password-link" class="text-muted">Forgot password?</a>
-        <a href="/register" class="text-muted">Need an account? <strong>Register</strong></a>
-      </div>
+        <form id="auth-form">
+          <div class="form-group">
+            <label for="email">Email</label>
+            <input type="email" id="email" name="email" placeholder="you@example.com" autocomplete="email" required />
+          </div>
 
-      <div id="error-message" class="auth-message"></div>
-    </form>
-  </div>
-</div>
+          <div class="form-group">
+            <label for="password">Password</label>
+            <input type="password" id="password" name="password" placeholder="••••••••" autocomplete="current-password" required />
+          </div>
 
-<script type="module">
-    import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-app.js";
-    import { 
-        getAuth, 
-        signInWithEmailAndPassword, 
-        createUserWithEmailAndPassword,
-        sendPasswordResetEmail
-    } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-auth.js";
+          <button type="submit" class="btn-primary" id="submit-btn">Sign in</button>
+          <div class="auth-footer-links">
+            <a href="#" id="forgot-password-link">Forgot password?</a>
+            <a href="/register">Create account</a>
+          </div>
+          <p id="error-message" class="auth-message" role="alert"></p>
+        </form>
+      {% endif %}
+    </section>
+  </main>
 
+  {% if not show_register %}
+    <script type="module">
+      import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-app.js";
+      import { getAuth, sendPasswordResetEmail, signInWithEmailAndPassword } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-auth.js";
 
-    const firebaseConfig = {
-
+      const firebaseConfig = {
         apiKey: "AIzaSyAf8ytTTyQo5ndX7PcetZFyp1W9ubs2aH4",
         authDomain: "draft-d36c3.firebaseapp.com",
         projectId: "draft-d36c3",
@@ -56,85 +72,55 @@
         messagingSenderId: "461424094330",
         appId: "1:461424094330:web:899ba79be001a2a843dfc3",
         measurementId: "G-K8YTKBYCC0"
-    };
+      };
 
+      const auth = getAuth(initializeApp(firebaseConfig));
+      const authForm = document.getElementById("auth-form");
+      const errorMessage = document.getElementById("error-message");
 
-    const app = initializeApp(firebaseConfig);
-    const auth = getAuth(app);
+      authForm.addEventListener("submit", async (event) => {
+        event.preventDefault();
+        errorMessage.textContent = "";
 
-    let isLoginMode = true;
-
-    const authForm = document.getElementById('auth-form');
-    const formTitle = document.getElementById('form-title');
-    const submitBtn = document.getElementById('submit-btn');
-    const toggleBtn = document.getElementById('toggle-btn');
-    const errorMessage = document.getElementById('error-message');
-
-    if (toggleBtn) {
-      toggleBtn.addEventListener('click', () => {
-          isLoginMode = !isLoginMode;
-          if (formTitle) formTitle.innerText = isLoginMode ? "Login" : "Register";
-          if (submitBtn) submitBtn.innerText = isLoginMode ? "Sign In" : "Sign Up";
-          toggleBtn.innerText = isLoginMode ? "Need an account? Register" : "Already have an account? Login";
-          if (errorMessage) errorMessage.innerText = "";
-      });
-    }
-
-    authForm.addEventListener('submit', async (e) => {
-        e.preventDefault();
-        errorMessage.innerText = "";
-
-        const email = document.getElementById('email').value;
-        const password = document.getElementById('password').value;
+        const email = document.getElementById("email").value.trim();
+        const password = document.getElementById("password").value;
 
         try {
-            let userCredential;
-            if (isLoginMode) {
-                userCredential = await signInWithEmailAndPassword(auth, email, password);
-            } else {
-                userCredential = await createUserWithEmailAndPassword(auth, email, password);
-            }
+          const userCredential = await signInWithEmailAndPassword(auth, email, password);
+          const token = await userCredential.user.getIdToken();
+          const response = await fetch("/login", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            credentials: "same-origin",
+            body: JSON.stringify({ token })
+          });
 
-            // Prefer using the user's instance method to get the current token
-            const token = await userCredential.user.getIdToken();
-
-            const response = await fetch('/login', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                credentials: 'same-origin',
-                body: JSON.stringify({ token })
-            });
-
-            if (response.ok) {
-                window.location.href = '/';
-            } else {
-                const data = await response.json();
-                errorMessage.innerText = data.message || "Authentication failed on server.";
-            }
-
+          if (!response.ok) {
+            const data = await response.json();
+            throw new Error(data.message || "Authentication failed on the server.");
+          }
+          window.location.href = "/";
         } catch (error) {
-            errorMessage.innerText = error.message;
+          errorMessage.textContent = error.message;
         }
-    });
+      });
 
-    // Forgot password handler - sends password reset email via Firebase
-    const forgotBtn = document.getElementById('forgot-password-link');
-    if (forgotBtn) {
-        forgotBtn.addEventListener('click', async (event) => {
-            event.preventDefault();
-            const email = document.getElementById('email').value.trim();
-            if (!email) {
-                return errorMessage.innerText = 'Enter your email above to receive a password reset link.';
-            }
-            try {
-                await sendPasswordResetEmail(auth, email);
-                alert('Password reset email sent! Check your inbox.');
-            } catch (err) {
-                console.error('Error sending reset email:', err);
-                alert('Could not send reset email: ' + (err.message || err));
-            }
-        });
-    }</script>
+      document.getElementById("forgot-password-link").addEventListener("click", async (event) => {
+        event.preventDefault();
+        const email = document.getElementById("email").value.trim();
+        if (!email) {
+          errorMessage.textContent = "Enter your email above to receive a password reset link.";
+          return;
+        }
 
+        try {
+          await sendPasswordResetEmail(auth, email);
+          errorMessage.textContent = "Password reset email sent. Check your inbox.";
+        } catch (error) {
+          errorMessage.textContent = error.message;
+        }
+      });
+    </script>
+  {% endif %}
 </body>
 </html>

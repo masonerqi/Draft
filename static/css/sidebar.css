@@ -97,3 +97,5 @@
   .sidebar { flex-direction: row; flex-wrap: wrap; justify-content: space-between; gap: 14px; position: sticky; top: 0; z-index: 10; }
   .sidebar-top, .sidebar-section, .sidebar-footer { width: 100%; }
 }
+
+

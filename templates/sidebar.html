@@ -1,9 +1,8 @@
 <aside class="sidebar">
   <div class="sidebar-top">
-    <div class="brand">
-      <i data-lucide="file-text"></i>
-      <span>Draft</span>
-    </div>
+    <a class="brand" href="/" aria-label="Draft home">
+      <img src="{{ url_for('static', filename='images/draft_logo.png') }}" alt="Draft" style="width: 80px; height: auto;" />
+    </a>
 
     <button type="button" class="sidebar-button" id="new-session-btn">
       <i data-lucide="plus"></i>
