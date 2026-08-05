@@ -6,7 +6,8 @@ from werkzeug.security import generate_password_hash, check_password_hash
 
 DB_PATH = os.environ.get("DATABASE_PATH")
 if not DB_PATH:
-    DB_PATH = os.path.join(os.path.dirname(__file__), "sessions.db")
+    # default to persistent path inside container /app/data/database.db
+    DB_PATH = os.path.join(os.getcwd(), "data", "database.db")
 
 
 def init_db():

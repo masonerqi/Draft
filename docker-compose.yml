@@ -1,13 +1,17 @@
+version: '3.8'
+
 services:
   web:
     build: .
     ports:
       - "5000:5000"
     volumes:
-      - .:/app  # If you already have this line, check step 2 below!
-      # OR mount it explicitly:
-      - ./firebase-credentials.json:/app/firebase-credentials.json
+      - .:/app:cached
+      - ./firebase-credentials.json:/app/firebase-credentials.json:ro
+      # Explicit host file mapping for persistent SQLite DB
+      - ./data/database.db:/app/data/database.db
     environment:
       - SECRET_KEY=dev-secret-key-change-in-prod
-      # If using an env var path for Firebase Admin SDK:
       - FIREBASE_SERVICE_ACCOUNT=/app/firebase-credentials.json
+      - DATABASE_PATH=/app/data/database.db
+    restart: unless-stopped

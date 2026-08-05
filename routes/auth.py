@@ -1,6 +1,7 @@
-from flask import Blueprint, session, jsonify, render_template
+from flask import Blueprint, session, jsonify, render_template, request
 from routes.utils import _parse_request_payload, get_current_user, login_required, _mask_api_key
 from database import create_user, authenticate_user, get_user_by_username, get_user_api_key, set_user_api_key, create_or_get_user_from_firebase
+from firebase_admin import auth
 
 # Import firebase auth; if not installed, handle gracefully
 try:
@@ -99,3 +100,26 @@ def update_user_settings():
         return jsonify({"error": "Gemini API key is required."}), 400
     set_user_api_key(current_user["id"], api_key)
     return jsonify({"api_key_saved": True, "api_key_masked": _mask_api_key(api_key)}), 200
+
+
+@auth_bp.route("/forgot-password", methods=["POST"])
+def forgot_password():
+    data = request.get_json()
+    email = data.get("email")
+
+    if not email:
+        return jsonify({"message": "Email is required"}), 400
+
+    try:
+        # Generate the password reset link via Firebase Admin SDK
+        link = auth.generate_password_reset_link(email)
+
+        # TODO: Send `link` to the user via your custom email service (SendGrid, Flask-Mail, etc.)
+        print(f"Generated Reset Link for {email}: {link}")
+
+        return (
+            jsonify({"message": "Password reset instructions sent to your email."}),
+            200,
+        )
+    except Exception as e:
+        return jsonify({"message": f"Error generating link: {str(e)}"}), 400

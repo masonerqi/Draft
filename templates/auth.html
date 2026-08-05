@@ -123,6 +123,7 @@
         </div>
         <button type="submit" class="btn-primary" id="submit-btn">Sign In</button>
         <button type="button" class="btn-toggle" id="toggle-btn">Need an account? Register</button>
+        <button type="button" class="btn-toggle" id="forgot-btn" style="margin-top:6px;">Forgot password?</button>
     </form>
     <div id="error-message" class="error-msg"></div>
 </div>
@@ -132,7 +133,8 @@
     import { 
         getAuth, 
         signInWithEmailAndPassword, 
-        createUserWithEmailAndPassword
+        createUserWithEmailAndPassword,
+        sendPasswordResetEmail
     } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-auth.js";
 
 
@@ -203,7 +205,24 @@
             errorMessage.innerText = error.message;
         }
     });
-</script>
+
+    // Forgot password handler - sends password reset email via Firebase
+    const forgotBtn = document.getElementById('forgot-btn');
+    if (forgotBtn) {
+        forgotBtn.addEventListener('click', async () => {
+            const email = document.getElementById('email').value.trim();
+            if (!email) {
+                return errorMessage.innerText = 'Enter your email above to receive a password reset link.';
+            }
+            try {
+                await sendPasswordResetEmail(auth, email);
+                alert('Password reset email sent! Check your inbox.');
+            } catch (err) {
+                console.error('Error sending reset email:', err);
+                alert('Could not send reset email: ' + (err.message || err));
+            }
+        });
+    }</script>
 
 </body>
 </html>
