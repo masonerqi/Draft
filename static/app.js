@@ -8,17 +8,15 @@ const state = {
   currentUser: null,
   timerInterval: null,
   totalSeconds: 0,
+  sidebarWidth: 280,
+  isResizingSidebar: false,
+  sidebarResizeStartX: 0,
+  sidebarResizeStartWidth: 280,
 };
 
 const elements = {
-  authView: document.getElementById("auth-view"),
   appShell: document.getElementById("app-shell"),
-  authError: document.getElementById("auth-error"),
-  authUsername: document.getElementById("auth-username"),
-  authPassword: document.getElementById("auth-password"),
-  authSubmit: document.getElementById("auth-submit"),
-  loginTab: document.getElementById("login-tab"),
-  registerTab: document.getElementById("register-tab"),
+  sidebarResizer: document.getElementById("sidebar-resizer"),
   profileName: document.getElementById("profile-name"),
   profileEmail: document.getElementById("profile-email"),
   profileInitials: document.getElementById("profile-initials"),
@@ -45,8 +43,6 @@ const elements = {
   transcriptInput: document.getElementById("transcript-input"),
   exportButton: document.getElementById("exportTextBtn"),
   newSessionButton: document.getElementById("new-session-btn"),
-  submitAuthButton: document.getElementById("auth-submit"),
-  authTabs: document.querySelectorAll(".auth-tab"),
 };
 
 function renderLucideIcons() {
@@ -77,57 +73,19 @@ async function fetchCurrentUser() {
   }
 }
 
-function showAuthMode(mode) {
-  state.authMode = mode;
-  elements.loginTab.classList.toggle("active", mode === "login");
-  elements.registerTab.classList.toggle("active", mode === "register");
-  elements.authSubmit.textContent = mode === "login" ? "Login" : "Register";
-  elements.authError.textContent = "";
-}
-
-function showAuthView(message = "") {
-  elements.authView.classList.remove("hidden");
-  elements.appShell.classList.add("hidden");
-  elements.authError.textContent = message;
-}
-
-async function showAppView(user) {
+function showAppView(user) {
   state.currentUser = user;
-  elements.authView.classList.add("hidden");
-  elements.appShell.classList.remove("hidden");
-  elements.profileName.textContent = user.username;
-  elements.profileEmail.textContent = user.username;
-  elements.profileInitials.textContent = formatInitials(user.username);
-  await loadHistory();
-  await ensureApiKeySaved();
+  if (elements.appShell) elements.appShell.classList.remove("hidden");
+  if (elements.profileName) elements.profileName.textContent = user.username;
+  if (elements.profileEmail) elements.profileEmail.textContent = user.username;
+  if (elements.profileInitials) elements.profileInitials.textContent = formatInitials(user.username);
+  // Load user-specific data, but don't await here to allow quick UI response
+  loadHistory();
+  ensureApiKeySaved();
 }
 
-async function submitAuth() {
-  const username = elements.authUsername.value.trim();
-  const password = elements.authPassword.value.trim();
-  if (!username || !password) {
-    elements.authError.textContent = "Both username and password are required.";
-    return;
-  }
-
-  const endpoint = state.authMode === "login" ? "/login" : "/register";
-  try {
-    const response = await fetch(endpoint, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      credentials: "same-origin",
-      body: JSON.stringify({ username, password }),
-    });
-    const data = await response.json();
-    if (!response.ok) {
-      elements.authError.textContent = data.error || "Authentication failed.";
-      return;
-    }
-    await showAppView({ id: data.id, username: data.username });
-  } catch (error) {
-    elements.authError.textContent = "Unable to communicate with the server.";
-  }
-}
+// Legacy inline auth removed. Authentication now happens on /login (Firebase-backed).
+// The client must redirect to /login when no active session is found.
 
 async function logout() {
   try {
@@ -136,7 +94,8 @@ async function logout() {
     console.warn("Logout failed", error);
   }
   state.currentUser = null;
-  showAuthView();
+  // Redirect to login page
+  window.location.href = "/login";
 }
 
 function startTimer() {
@@ -555,6 +514,72 @@ function escapeHtml(str) {
   return div.innerHTML;
 }
 
+function clamp(value, min, max) {
+  return Math.min(max, Math.max(min, value));
+}
+
+function setSidebarWidth(width) {
+  const nextWidth = clamp(width, 220, 420);
+  state.sidebarWidth = nextWidth;
+  document.documentElement.style.setProperty("--sidebar-width", `${nextWidth}px`);
+  try {
+    window.localStorage.setItem("sidebar-width", String(nextWidth));
+  } catch (error) {
+    console.warn("Unable to persist sidebar width", error);
+  }
+}
+
+function initializeSidebarResize() {
+  const resizer = elements.sidebarResizer;
+  if (!resizer) {
+    return;
+  }
+
+  const savedWidth = window.localStorage.getItem("sidebar-width");
+  if (savedWidth) {
+    const parsedWidth = Number.parseInt(savedWidth, 10);
+    if (!Number.isNaN(parsedWidth)) {
+      setSidebarWidth(parsedWidth);
+    }
+  } else {
+    setSidebarWidth(state.sidebarWidth);
+  }
+
+  const stopResizing = () => {
+    if (!state.isResizingSidebar) {
+      return;
+    }
+    state.isResizingSidebar = false;
+    resizer.classList.remove("resizing");
+    document.body.style.cursor = "";
+    document.body.style.userSelect = "";
+  };
+
+  resizer.addEventListener("mousedown", (event) => {
+    if (window.innerWidth <= 960) {
+      return;
+    }
+    state.isResizingSidebar = true;
+    state.sidebarResizeStartX = event.clientX;
+    state.sidebarResizeStartWidth = state.sidebarWidth;
+    resizer.classList.add("resizing");
+    document.body.style.cursor = "col-resize";
+    document.body.style.userSelect = "none";
+    event.preventDefault();
+  });
+
+  window.addEventListener("mousemove", (event) => {
+    if (!state.isResizingSidebar) {
+      return;
+    }
+    const delta = event.clientX - state.sidebarResizeStartX;
+    setSidebarWidth(state.sidebarResizeStartWidth + delta);
+  });
+
+  window.addEventListener("mouseup", stopResizing);
+  window.addEventListener("mouseleave", stopResizing);
+}
+
 function initializeEventListeners() {
   const newSessionButton = document.getElementById("new-session-btn");
   if (newSessionButton) {
@@ -603,19 +628,6 @@ function initializeEventListeners() {
     });
   }
 
-  const loginTab = document.getElementById("login-tab");
-  if (loginTab) {
-    loginTab.addEventListener("click", () => showAuthMode("login"));
-  }
-
-  const registerTab = document.getElementById("register-tab");
-  if (registerTab) {
-    registerTab.addEventListener("click", () => showAuthMode("register"));
-  }
-
-  if (elements.authSubmit) {
-    elements.authSubmit.addEventListener("click", submitAuth);
-  }
 
   const settingsSaveButton = document.getElementById("settings-save-btn");
   if (settingsSaveButton) {
@@ -648,14 +660,15 @@ function initializeEventListeners() {
 }
 
 async function initializeApp() {
+  initializeSidebarResize();
   initializeEventListeners();
   renderLucideIcons();
   const user = await fetchCurrentUser();
   if (user) {
-    await showAppView(user);
+    showAppView(user);
   } else {
-    showAuthMode("login");
-    showAuthView();
+    // Redirect to the dedicated Firebase-based login page
+    window.location.href = "/login";
   }
 }
 

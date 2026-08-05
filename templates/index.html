@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Draft • AI Meeting Summarizer</title>
+  <link rel="stylesheet" href="/static/style.css" />
+  <script src="https://unpkg.com/lucide@latest"></script>
+</head>
+<body>
+
+  <!-- App Shell (Main Workspace) -->
+  <div class="app-shell" id="app-shell">
+    {% include "sidebar.html" %}
+    <div class="sidebar-resizer" id="sidebar-resizer" aria-hidden="true"></div>
+ 
+    <main class="main-content">
+      <header class="topbar"></header>
+
+      <section class="panel" id="input-view">
+        <div class="section-title">
+          <div>
+            <h2>Capture or paste a transcript</h2>
+            <p>Use the recorder or paste your notes to generate a refined meeting summary.</p>
+          </div>
+          <div class="status-pill" id="record-status-indicator">
+            <span class="status-dot"></span>
+            <span id="record-status-text">Ready</span>
+            <span class="live-badge hidden" id="live-badge">Live</span>
+          </div>
+        </div>
+
+        <textarea class="transcription-textarea" id="transcript-input" placeholder="Type your notes or record live audio from the mic."></textarea>
+
+        <div class="action-row">
+          <button type="button" class="button-secondary text-button" id="clear-input-btn">
+            <i data-lucide="refresh-cw"></i>
+            Clear
+          </button>
+          <button type="button" class="button" id="submit-transcript-btn">
+            <i data-lucide="sparkles"></i>
+            Summarize
+          </button>
+        </div>
+      </section>
+
+      <section class="panel hidden" id="results">
+        <div class="error-banner" id="error-banner"></div>
+
+        <div class="section-title">
+          <div>
+            <h2>Summary Analysis</h2>
+            <p id="result-meta"></p>
+          </div>
+        </div>
+
+        <div class="result-grid">
+          <div class="result-card">
+            <h3>Key Discussion Points</h3>
+            <p id="result-summary"></p>
+          </div>
+          <div class="result-card">
+            <h3>Decisions Made</h3>
+            <ul id="result-decisions"></ul>
+          </div>
+          <div class="result-card">
+            <h3>Action Items</h3>
+            <ul id="result-actions"></ul>
+          </div>
+          <div class="result-card hidden" id="transcript-section">
+            <h3>Full Text Archive</h3>
+            <div class="toggle-block" id="transcript-toggle" onclick="toggleTranscript()">
+              <div class="toggle-header">
+                <span>Show raw transcript</span>
+                <i data-lucide="chevron-right"></i>
+              </div>
+            </div>
+            <div class="toggle-body" id="transcript-text"></div>
+          </div>
+        </div>
+
+        <div class="action-row">
+          <button type="button" class="button-secondary text-button" id="return-to-recorder-btn">
+            <i data-lucide="chevron-left"></i>
+            Return to Recorder
+          </button>
+          <button type="button" class="button-secondary text-button" id="exportTextBtn">
+            <i data-lucide="download"></i>
+            Export as .txt
+          </button>
+        </div>
+      </section>
+
+      <div class="control-dock-wrapper" id="floating-dock-row">
+        <div class="control-dock">
+          <button type="button" class="dock-record-trigger" id="dock-record-btn" title="Toggle Mic Recording Mode"></button>
+          <div class="dock-timer" id="dock-timer-display">0:00</div>
+          <div class="dock-audio-wave">
+            <div class="wave-bar"></div>
+            <div class="wave-bar"></div>
+            <div class="wave-bar"></div>
+            <div class="wave-bar"></div>
+          </div>
+        </div>
+      </div>
+    </main>
+  </div>
+
+  <div class="loading-overlay hidden" id="loading">
+    <div class="loading-panel">
+      <div class="spinner"></div>
+      <p class="loading-msg" id="loading-msg">Sending to Gemini Engine...</p>
+    </div>
+  </div>
+
+  <div class="modal hidden" id="settings-modal">
+    <div class="modal-panel">
+      <div class="modal-header">
+        <div>
+          <h2>Gemini API Key</h2>
+          <p>Store a personal Google AI Studio API key so your summary requests use your own account.</p>
+        </div>
+        <button type="button" class="icon-button" id="settings-close-btn" aria-label="Close settings">
+          <i data-lucide="x"></i>
+        </button>
+      </div>
+      <div class="modal-body">
+        <div class="modal-field">
+          <label for="api-key-input">Gemini API key</label>
+          <input id="api-key-input" type="text" autocomplete="off" placeholder="Paste your Gemini API key here" />
+        </div>
+        <p>Get your free API key from <a href="https://studio.google.com/" target="_blank" rel="noopener">Google AI Studio</a>.</p>
+        <div class="auth-error" id="settings-error"></div>
+        <p class="empty-note" id="settings-status"></p>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="button" id="settings-save-btn">
+          <i data-lucide="save"></i>
+          Save key
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <script src="/static/app.js" defer></script>
+  <script>lucide.createIcons();</script>
+</body>
+</html>

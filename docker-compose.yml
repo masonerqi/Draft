@@ -3,8 +3,11 @@ services:
     build: .
     ports:
       - "5000:5000"
-    env_file:
-      - .env
     volumes:
-      - ./data:/app/data
-    restart: unless-stopped
+      - .:/app  # If you already have this line, check step 2 below!
+      # OR mount it explicitly:
+      - ./firebase-credentials.json:/app/firebase-credentials.json
+    environment:
+      - SECRET_KEY=dev-secret-key-change-in-prod
+      # If using an env var path for Firebase Admin SDK:
+      - FIREBASE_SERVICE_ACCOUNT=/app/firebase-credentials.json

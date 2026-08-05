@@ -21,6 +21,7 @@ def init_db():
             username TEXT UNIQUE NOT NULL,
             password_hash TEXT NOT NULL,
             gemini_api_key TEXT,
+            firebase_uid TEXT UNIQUE,
             created_at DATETIME NOT NULL
         )
     """)
@@ -44,6 +45,9 @@ def init_db():
     user_columns = [row[1] for row in cursor.fetchall()]
     if "gemini_api_key" not in user_columns:
         cursor.execute("ALTER TABLE users ADD COLUMN gemini_api_key TEXT")
+        conn.commit()
+    if "firebase_uid" not in user_columns:
+        cursor.execute("ALTER TABLE users ADD COLUMN firebase_uid TEXT")
         conn.commit()
 
     cursor.execute("PRAGMA table_info(sessions)")
@@ -164,6 +168,58 @@ def create_user(username, password):
     cursor.execute(
         "INSERT INTO users (username, password_hash, created_at) VALUES (?, ?, ?)",
         (username, password_hash, datetime.now().isoformat())
+    )
+    conn.commit()
+    user_id = cursor.lastrowid
+    conn.close()
+    return user_id
+
+
+def get_user_by_firebase_uid(firebase_uid):
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute("SELECT id, username, password_hash, firebase_uid, created_at FROM users WHERE firebase_uid = ?", (firebase_uid,))
+    row = cursor.fetchone()
+    conn.close()
+    if not row:
+        return None
+    return {"id": row[0], "username": row[1], "password_hash": row[2], "firebase_uid": row[3], "created_at": row[4]}
+
+
+def get_user_by_email(email):
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute("SELECT id, username, password_hash, firebase_uid, created_at FROM users WHERE username = ?", (email,))
+    row = cursor.fetchone()
+    conn.close()
+    if not row:
+        return None
+    return {"id": row[0], "username": row[1], "password_hash": row[2], "firebase_uid": row[3], "created_at": row[4]}
+
+
+def create_or_get_user_from_firebase(firebase_uid, email=None):
+    # Try to find by firebase_uid first
+    user = get_user_by_firebase_uid(firebase_uid)
+    if user:
+        return user["id"]
+    # Then try by email (stored in username)
+    if email:
+        user = get_user_by_email(email)
+        if user:
+            # update firebase_uid for this user
+            conn = sqlite3.connect(DB_PATH)
+            cursor = conn.cursor()
+            cursor.execute("UPDATE users SET firebase_uid = ? WHERE id = ?", (firebase_uid, user["id"]))
+            conn.commit()
+            conn.close()
+            return user["id"]
+    # Create a new user using email as username
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    # create with empty password_hash since auth is via Firebase
+    cursor.execute(
+        "INSERT INTO users (username, password_hash, firebase_uid, created_at) VALUES (?, ?, ?, ?)",
+        (email or f"firebase:{firebase_uid}", "", firebase_uid, datetime.now().isoformat())
     )
     conn.commit()
     user_id = cursor.lastrowid

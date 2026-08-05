@@ -1,0 +1,209 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Login / Register - Draft</title>
+    <style>
+        :root {
+            --paper: #FAF7F0;
+            --forest-dark: #25392C;
+            --coral: #D9573F;
+            --border: #DCD2B8;
+            --white: #FFFFFF;
+            --ink-soft: #5B6459;
+            --font-mono: 'JetBrains Mono', monospace, sans-serif;
+            --font-body: 'Karla', sans-serif;
+        }
+
+        body {
+            font-family: var(--font-body);
+            background-color: var(--paper);
+            color: var(--forest-dark);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            margin: 0;
+        }
+
+        .auth-card {
+            background: var(--white);
+            border: 1.5px solid var(--border);
+            border-radius: 14px;
+            padding: 32px;
+            width: 100%;
+            max-width: 400px;
+            box-shadow: 0 6px 20px rgba(37, 57, 44, 0.08);
+        }
+
+        .auth-card h2 {
+            margin-top: 0;
+            margin-bottom: 20px;
+            color: var(--forest-dark);
+            text-align: center;
+        }
+
+        .field {
+            margin-bottom: 16px;
+        }
+
+        .field label {
+            display: block;
+            font-family: var(--font-mono);
+            font-size: 0.75rem;
+            text-transform: uppercase;
+            font-weight: 700;
+            margin-bottom: 6px;
+        }
+
+        .field input {
+            width: 100%;
+            padding: 10px 12px;
+            border: 1.5px solid var(--border);
+            border-radius: 6px;
+            background: var(--paper);
+            box-sizing: border-box;
+            font-size: 0.95rem;
+        }
+
+        .field input:focus {
+            outline: none;
+            border-color: var(--forest-dark);
+            background: var(--white);
+        }
+
+        .btn-primary {
+            width: 100%;
+            padding: 12px;
+            background: var(--coral);
+            color: var(--white);
+            border: none;
+            border-radius: 6px;
+            font-family: var(--font-mono);
+            font-weight: 700;
+            text-transform: uppercase;
+            cursor: pointer;
+            margin-top: 10px;
+        }
+
+        .btn-toggle {
+            width: 100%;
+            padding: 10px;
+            background: transparent;
+            color: var(--forest-dark);
+            border: none;
+            font-family: var(--font-mono);
+            font-size: 0.8rem;
+            cursor: pointer;
+            margin-top: 8px;
+            text-decoration: underline;
+        }
+
+        .error-msg {
+            color: var(--coral);
+            font-size: 0.85rem;
+            margin-top: 12px;
+            text-align: center;
+        }
+    </style>
+</head>
+<body>
+
+<div class="auth-card">
+    <h2 id="form-title">Login</h2>
+    <form id="auth-form">
+        <div class="field">
+            <label for="email">Email</label>
+            <input type="email" id="email" required placeholder="you@example.com">
+        </div>
+        <div class="field">
+            <label for="password">Password</label>
+            <input type="password" id="password" required placeholder="••••••••">
+        </div>
+        <button type="submit" class="btn-primary" id="submit-btn">Sign In</button>
+        <button type="button" class="btn-toggle" id="toggle-btn">Need an account? Register</button>
+    </form>
+    <div id="error-message" class="error-msg"></div>
+</div>
+
+<script type="module">
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-app.js";
+    import { 
+        getAuth, 
+        signInWithEmailAndPassword, 
+        createUserWithEmailAndPassword
+    } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-auth.js";
+
+
+    const firebaseConfig = {
+
+        apiKey: "AIzaSyAf8ytTTyQo5ndX7PcetZFyp1W9ubs2aH4",
+        authDomain: "draft-d36c3.firebaseapp.com",
+        projectId: "draft-d36c3",
+        storageBucket: "draft-d36c3.firebasestorage.app",
+        messagingSenderId: "461424094330",
+        appId: "1:461424094330:web:899ba79be001a2a843dfc3",
+        measurementId: "G-K8YTKBYCC0"
+    };
+
+
+    const app = initializeApp(firebaseConfig);
+    const auth = getAuth(app);
+
+    let isLoginMode = true;
+
+    const authForm = document.getElementById('auth-form');
+    const formTitle = document.getElementById('form-title');
+    const submitBtn = document.getElementById('submit-btn');
+    const toggleBtn = document.getElementById('toggle-btn');
+    const errorMessage = document.getElementById('error-message');
+
+    toggleBtn.addEventListener('click', () => {
+        isLoginMode = !isLoginMode;
+        formTitle.innerText = isLoginMode ? "Login" : "Register";
+        submitBtn.innerText = isLoginMode ? "Sign In" : "Sign Up";
+        toggleBtn.innerText = isLoginMode ? "Need an account? Register" : "Already have an account? Login";
+        errorMessage.innerText = "";
+    });
+
+    authForm.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        errorMessage.innerText = "";
+
+        const email = document.getElementById('email').value;
+        const password = document.getElementById('password').value;
+
+        try {
+            let userCredential;
+            if (isLoginMode) {
+                userCredential = await signInWithEmailAndPassword(auth, email, password);
+            } else {
+                userCredential = await createUserWithEmailAndPassword(auth, email, password);
+            }
+
+            // Prefer using the user's instance method to get the current token
+            const token = await userCredential.user.getIdToken();
+
+            const response = await fetch('/login', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                credentials: 'same-origin',
+                body: JSON.stringify({ token })
+            });
+
+            if (response.ok) {
+                window.location.href = '/';
+            } else {
+                const data = await response.json();
+                errorMessage.innerText = data.message || "Authentication failed on server.";
+            }
+
+        } catch (error) {
+            errorMessage.innerText = error.message;
+        }
+    });
+</script>
+
+</body>
+</html>

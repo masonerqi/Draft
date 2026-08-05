@@ -5,3 +5,10 @@ __pycache__/
 *.db
 
 database.db
+
+# Ignore Firebase private key
+firebase-credentials.json
+
+# (Optional) Ignore ANY json key file in the root directory just in case
+*-credentials.json
+*.json.secret

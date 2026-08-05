@@ -1,6 +1,6 @@
 :root {
   color-scheme: light;
-  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-family: Helvetica, Arial, sans-serif;
   background: #f8fafc;
   color: #0f172a;
   --bg-body: #f8fafc;
@@ -54,11 +54,12 @@ button {
 
 .app-shell {
   display: grid;
-  grid-template-columns: 280px 1fr;
+  grid-template-columns: var(--sidebar-width, 280px) 8px 1fr;
   min-height: 100vh;
 }
 
 .sidebar {
+  grid-column: 1;
   display: flex;
   flex-direction: column;
   justify-content: space-between;
@@ -67,6 +68,32 @@ button {
   background: #ffffff;
   border-right: 1px solid var(--border);
   overflow-x: hidden;
+  min-width: 0;
+}
+
+.sidebar-resizer {
+  grid-column: 2;
+  width: 8px;
+  cursor: col-resize;
+  background: linear-gradient(180deg, transparent 0%, rgba(15, 23, 42, 0.06) 50%, transparent 100%);
+  position: relative;
+  transition: background .2s ease;
+}
+
+.sidebar-resizer:hover,
+.sidebar-resizer.resizing {
+  background: linear-gradient(180deg, transparent 0%, rgba(37, 99, 235, 0.22) 50%, transparent 100%);
+}
+
+.sidebar-resizer::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  margin: auto;
+  width: 2px;
+  height: 44px;
+  border-radius: 999px;
+  background: rgba(148, 163, 184, 0.7);
 }
 
 .sidebar-top,
@@ -819,7 +846,11 @@ textarea.transcription-textarea {
   .app-shell {
     grid-template-columns: 1fr;
   }
-
+  
+  .sidebar-resizer {
+    display: none;
+  }
+  
   .sidebar {
     flex-direction: row;
     flex-wrap: wrap;
