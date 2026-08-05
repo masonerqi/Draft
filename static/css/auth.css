@@ -1,0 +1,29 @@
+/* Authentication specific styles */
+
+.card--auth {
+  max-width: 420px;
+  margin-inline: auto;
+}
+.card--auth .form-group { margin-bottom: 16px; }
+.card--auth .forgot-password {
+  display: block;
+  text-align: right;
+  font-size: 0.85rem;
+  color: var(--text-muted);
+  text-decoration: none;
+  margin-top: 6px;
+  transition: color .18s var(--ease-standard);
+}
+.card--auth .forgot-password:hover { color: var(--text-primary); text-decoration: underline; }
+.card--auth .auth-message { font-size: 0.85rem; padding: 10px 14px; border-radius: var(--radius-sm); margin-top: 12px; display: none; }
+.card--auth .auth-message.success { display: block; background-color: rgba(249,244,238,0.85); color: var(--text-primary); }
+.card--auth .auth-message.error { display: block; background-color: #FBEAEA; color: #8A2020; }
+
+/* Make primary button full width specifically in auth card */
+.card--auth .btn-primary { width: 100%; margin-top: 8px; margin-bottom: 16px; }
+
+/* Legacy auth-card helpers (used in other views) */
+.auth-card { width: min(480px, calc(100% - 40px)); background: #FFFFFF; border: 1px solid var(--border); border-radius: 28px; padding: 36px; box-shadow: var(--shadow); }
+.auth-card h1 { margin: 0 0 10px; font-size: 28px; }
+.auth-field input { width: 100%; padding: 14px 16px; border: 1px solid var(--border); border-radius: 14px; background: var(--bg-muted); }
+.auth-error { min-height: 20px; color: #B91C1C; font-size: 13px; margin-bottom: 12px; }

@@ -9,6 +9,8 @@ const state = {
   timerInterval: null,
   totalSeconds: 0,
   sidebarWidth: 280,
+  sessions: [],
+  currentView: "home",
   isResizingSidebar: false,
   sidebarResizeStartX: 0,
   sidebarResizeStartWidth: 280,
@@ -21,6 +23,10 @@ const elements = {
   profileEmail: document.getElementById("profile-email"),
   profileInitials: document.getElementById("profile-initials"),
   historyList: document.getElementById("history-list"),
+  homeView: document.getElementById("home-view"),
+  searchView: document.getElementById("search-view"),
+  searchResultsList: document.getElementById("search-results-list"),
+  searchInput: document.getElementById("session-search-input"),
   recordButton: document.getElementById("dock-record-btn"),
   copyButton: document.getElementById("copy-btn"),
   settingsButton: document.getElementById("settings-btn"),
@@ -79,9 +85,16 @@ function showAppView(user) {
   if (elements.profileName) elements.profileName.textContent = user.username;
   if (elements.profileEmail) elements.profileEmail.textContent = user.username;
   if (elements.profileInitials) elements.profileInitials.textContent = formatInitials(user.username);
+  const settingsName = document.getElementById("settings-profile-name");
+  const settingsEmail = document.getElementById("settings-profile-email");
+  const settingsInitials = document.getElementById("settings-profile-initials");
+  if (settingsName) settingsName.textContent = user.username;
+  if (settingsEmail) settingsEmail.textContent = user.username;
+  if (settingsInitials) settingsInitials.textContent = formatInitials(user.username);
   // Load user-specific data, but don't await here to allow quick UI response
   loadHistory();
   ensureApiKeySaved();
+  showHome();
 }
 
 // Legacy inline auth removed. Authentication now happens on /login (Firebase-backed).
@@ -313,6 +326,8 @@ function showResults(data) {
   }
 
   elements.inputView.classList.add("hidden");
+  elements.homeView.classList.add("hidden");
+  elements.searchView.classList.add("hidden");
   elements.resultsView.classList.remove("hidden");
   document.getElementById("floating-dock-row").style.display = "none";
   highlightActiveHistoryItem();
@@ -326,8 +341,11 @@ function showError(message) {
   elements.errorBanner.textContent = message;
   elements.errorBanner.style.display = "block";
   elements.inputView.classList.add("hidden");
+  elements.homeView.classList.add("hidden");
+  elements.searchView.classList.add("hidden");
   elements.loadingOverlay.classList.add("hidden");
   elements.resultsView.classList.remove("hidden");
+  document.getElementById("floating-dock-row").style.display = "none";
 }
 
 function hideError() {
@@ -342,13 +360,21 @@ async function loadHistory() {
       return;
     }
     const data = await res.json();
-    if (!Array.isArray(data) || data.length === 0) {
-      elements.historyList.innerHTML = '<li class="history-empty">No sessions yet.</li>';
-      renderLucideIcons();
-      return;
-    }
+    state.sessions = Array.isArray(data) ? data : [];
+    renderSessionList(elements.historyList, state.sessions, "No notes yet. Start your first recording when you are ready.");
+    renderSessionList(elements.searchResultsList, state.sessions, "No matching notes found.");
+  } catch (e) {
+    console.warn("History unreachable.", e);
+  }
+}
 
-    elements.historyList.innerHTML = data
+function renderSessionList(container, sessions, emptyMessage) {
+  if (!container) return;
+  if (!sessions.length) {
+    container.innerHTML = `<li class="history-empty">${emptyMessage}</li>`;
+    return;
+  }
+  container.innerHTML = sessions
       .map((session) => `
         <li class="history-item" data-id="${session.id}">
           <div class="history-item-body" onclick="loadSession(${session.id})">
@@ -361,12 +387,16 @@ async function loadHistory() {
         </li>
       `)
       .join("");
+  renderLucideIcons();
+  highlightActiveHistoryItem();
+}
 
-    renderLucideIcons();
-    highlightActiveHistoryItem();
-  } catch (e) {
-    console.warn("History unreachable.", e);
-  }
+function filterSessions(query) {
+  const normalized = query.trim().toLowerCase();
+  const matches = normalized
+    ? state.sessions.filter((session) => `${session.summary || ""} ${session.created_at || ""}`.toLowerCase().includes(normalized))
+    : state.sessions;
+  renderSessionList(elements.searchResultsList, matches, normalized ? "No matching notes found." : "No notes yet.");
 }
 
 function highlightActiveHistoryItem() {
@@ -397,6 +427,7 @@ window.deleteSession = async function (id) {
 };
 
 async function openSettings() {
+  setActiveNav("settings-btn");
   elements.settingsError.textContent = "";
   elements.settingsStatus.textContent = "";
   elements.apiKeyInput.value = "";
@@ -409,8 +440,13 @@ function closeSettings() {
   elements.settingsModal.classList.add("hidden");
   if (state.activeSessionId) {
     elements.resultsView.classList.remove("hidden");
+    setActiveNav("");
+  } else if (state.currentView === "home") {
+    showHome();
+  } else if (state.currentView === "search") {
+    showSearch();
   } else {
-    elements.inputView.classList.remove("hidden");
+    showInput();
   }
 }
 
@@ -477,9 +513,43 @@ function hideLoading() {
 }
 
 function showInput() {
+  state.currentView = "record";
+  elements.homeView.classList.add("hidden");
+  elements.searchView.classList.add("hidden");
   elements.inputView.classList.remove("hidden");
   elements.resultsView.classList.add("hidden");
   document.getElementById("floating-dock-row").style.display = "flex";
+  setActiveNav("");
+}
+
+function showHome() {
+  state.currentView = "home";
+  elements.resultsView.classList.add("hidden");
+  elements.searchView.classList.add("hidden");
+  elements.inputView.classList.add("hidden");
+  elements.homeView.classList.remove("hidden");
+  document.getElementById("floating-dock-row").style.display = "none";
+  setActiveNav("nav-home-btn");
+  loadHistory();
+}
+
+async function showSearch() {
+  state.currentView = "search";
+  elements.resultsView.classList.add("hidden");
+  elements.homeView.classList.add("hidden");
+  elements.inputView.classList.add("hidden");
+  elements.searchView.classList.remove("hidden");
+  document.getElementById("floating-dock-row").style.display = "none";
+  setActiveNav("nav-search-btn");
+  await loadHistory();
+  filterSessions(elements.searchInput.value || "");
+  if (elements.searchInput) elements.searchInput.focus();
+}
+
+window.showSearch = showSearch;
+
+function setActiveNav(activeId) {
+  document.querySelectorAll(".nav-item").forEach((item) => item.classList.toggle("active", item.id === activeId));
 }
 
 function resetToInput() {
@@ -487,6 +557,8 @@ function resetToInput() {
   state.activeSessionId = null;
   hideError();
   elements.resultsView.classList.add("hidden");
+  elements.homeView.classList.add("hidden");
+  elements.searchView.classList.add("hidden");
   elements.loadingOverlay.classList.add("hidden");
   elements.inputView.classList.remove("hidden");
   document.getElementById("floating-dock-row").style.display = "flex";
@@ -494,6 +566,8 @@ function resetToInput() {
   document.getElementById("dock-timer-display").textContent = "0:00";
   document.getElementById("live-badge").style.display = "none";
   state.lastInputWasAudio = false;
+  state.currentView = "record";
+  setActiveNav("");
   highlightActiveHistoryItem();
 }
 
@@ -586,6 +660,19 @@ function initializeEventListeners() {
     newSessionButton.addEventListener("click", resetToInput);
   }
 
+  const homeButton = document.getElementById("nav-home-btn");
+  if (homeButton) homeButton.addEventListener("click", showHome);
+
+  const homeRecordButton = document.getElementById("home-record-btn");
+  if (homeRecordButton) {
+    homeRecordButton.addEventListener("click", async () => {
+      resetToInput();
+      await toggleRecord();
+    });
+  }
+
+  if (elements.searchInput) elements.searchInput.addEventListener("input", (event) => filterSessions(event.target.value));
+
   if (elements.copyButton) {
     elements.copyButton.addEventListener("click", copyTranscriptToClipboard);
   }
@@ -602,14 +689,6 @@ function initializeEventListeners() {
   const returnButton = document.getElementById("return-to-recorder-btn");
   if (returnButton) {
     returnButton.addEventListener("click", resetToInput);
-  }
-
-  const quickRecordButton = document.getElementById("nav-record-btn");
-  if (quickRecordButton) {
-    quickRecordButton.addEventListener("click", async () => {
-      showInput();
-      await toggleRecord();
-    });
   }
 
   if (elements.settingsButton) {

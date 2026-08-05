@@ -1,0 +1,86 @@
+/* Components: cards, buttons, inputs, animations */
+
+/* Cards */
+.card {
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 18px;
+  box-shadow: var(--shadow);
+}
+
+/* Pill primary button */
+.btn-primary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 10px 16px;
+  background: var(--accent);
+  color: #fff;
+  border-radius: var(--radius-pill);
+  border: none;
+  font-weight: 700;
+  transition: transform .12s var(--ease-standard), box-shadow .12s var(--ease-standard);
+}
+.btn-primary:hover { transform: translateY(-2px); box-shadow: 0 8px 18px rgba(37,99,235,0.12); }
+
+/* Outline variant used in footer and elsewhere */
+.btn-outline {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 10px 16px;
+  background: transparent;
+  color: var(--text-primary);
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--border);
+  font-weight: 700;
+}
+
+/* Inputs */
+input[type="text"],
+input[type="email"],
+input[type="password"],
+textarea {
+  width: 100%;
+  display: block;
+  margin-bottom: 16px;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--bg-body);
+  color: var(--text-primary);
+  box-sizing: border-box;
+}
+
+/* Keyframe animations */
+@keyframes heyteaFadeUp {
+  from { opacity: 0; transform: translateY(16px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes spin { to { transform: rotate(360deg); } }
+
+@keyframes wavePulse { to { transform: scaleY(1.6); } }
+
+/* Utility class for applying fade-up */
+.animate-fade-up { animation: heyteaFadeUp .32s var(--ease-standard) both; }
+
+/* Transcript card specific tweaks */
+.transcript-card { padding: 22px; }
+.transcript-header h2 { margin: 0 0 6px; }
+.transcript-header p { margin: 0; color: var(--text-muted); }
+
+.status-badge { display: inline-flex; align-items: center; gap: 8px; padding: 6px 10px; border-radius: 999px; background: var(--bg-muted); border: 1px solid var(--border); font-weight: 700; }
+.status-badge.ready .dot { background: #34D399; }
+
+/* Floating recorder pill */
+.control-dock-wrapper { margin: 24px auto 0; display: flex; justify-content: center; }
+.control-dock { background: var(--bg-panel); border-radius: 99px; padding: 8px 24px; box-shadow: var(--shadow); display: flex; align-items: center; gap: 16px; width: fit-content; }
+.control-dock .dock-record-trigger { width: 48px; height: 48px; border-radius: 999px; }
+.control-dock .dock-timer { min-width: 48px; font-weight: 700; }
+.control-dock .dock-audio-wave { display:flex; align-items:flex-end; gap:6px; }
+.control-dock .wave-bar { width:6px; height:12px; background: #D6D3CC; border-radius:999px; }
+

@@ -4,128 +4,37 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Login / Register - Draft</title>
-    <style>
-        :root {
-            --paper: #FAF7F0;
-            --forest-dark: #25392C;
-            --coral: #D9573F;
-            --border: #DCD2B8;
-            --white: #FFFFFF;
-            --ink-soft: #5B6459;
-            --font-mono: 'JetBrains Mono', monospace, sans-serif;
-            --font-body: 'Karla', sans-serif;
-        }
-
-        body {
-            font-family: var(--font-body);
-            background-color: var(--paper);
-            color: var(--forest-dark);
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            min-height: 100vh;
-            margin: 0;
-        }
-
-        .auth-card {
-            background: var(--white);
-            border: 1.5px solid var(--border);
-            border-radius: 14px;
-            padding: 32px;
-            width: 100%;
-            max-width: 400px;
-            box-shadow: 0 6px 20px rgba(37, 57, 44, 0.08);
-        }
-
-        .auth-card h2 {
-            margin-top: 0;
-            margin-bottom: 20px;
-            color: var(--forest-dark);
-            text-align: center;
-        }
-
-        .field {
-            margin-bottom: 16px;
-        }
-
-        .field label {
-            display: block;
-            font-family: var(--font-mono);
-            font-size: 0.75rem;
-            text-transform: uppercase;
-            font-weight: 700;
-            margin-bottom: 6px;
-        }
-
-        .field input {
-            width: 100%;
-            padding: 10px 12px;
-            border: 1.5px solid var(--border);
-            border-radius: 6px;
-            background: var(--paper);
-            box-sizing: border-box;
-            font-size: 0.95rem;
-        }
-
-        .field input:focus {
-            outline: none;
-            border-color: var(--forest-dark);
-            background: var(--white);
-        }
-
-        .btn-primary {
-            width: 100%;
-            padding: 12px;
-            background: var(--coral);
-            color: var(--white);
-            border: none;
-            border-radius: 6px;
-            font-family: var(--font-mono);
-            font-weight: 700;
-            text-transform: uppercase;
-            cursor: pointer;
-            margin-top: 10px;
-        }
-
-        .btn-toggle {
-            width: 100%;
-            padding: 10px;
-            background: transparent;
-            color: var(--forest-dark);
-            border: none;
-            font-family: var(--font-mono);
-            font-size: 0.8rem;
-            cursor: pointer;
-            margin-top: 8px;
-            text-decoration: underline;
-        }
-
-        .error-msg {
-            color: var(--coral);
-            font-size: 0.85rem;
-            margin-top: 12px;
-            text-align: center;
-        }
-    </style>
+    <link rel="stylesheet" href="/static/css/main.css" />
 </head>
 <body>
 
-<div class="auth-card">
-    <h2 id="form-title">Login</h2>
+<div class="auth-wrapper">
+  <div class="card card--auth animate-fade-up">
+    <img src="{{ url_for('static', filename='images/draft_logo.png') }}" alt="Logo" style="height: 40px; margin-bottom: 16px;">
+
+    <h2 id="form-title">Sign In</h2>
+
     <form id="auth-form">
-        <div class="field">
-            <label for="email">Email</label>
-            <input type="email" id="email" required placeholder="you@example.com">
-        </div>
-        <div class="field">
-            <label for="password">Password</label>
-            <input type="password" id="password" required placeholder="••••••••">
-        </div>
-        <button type="submit" class="btn-primary" id="submit-btn">Sign In</button>
-        <button type="button" class="btn-toggle" id="toggle-btn">Need an account? Register</button>
-        <button type="button" class="btn-toggle" id="forgot-btn" style="margin-top:6px;">Forgot password?</button>
+      <div class="form-group">
+        <label for="email">Email</label>
+        <input type="email" id="email" name="email" placeholder="you@example.com" required>
+      </div>
+
+      <div class="form-group">
+        <label for="password">Password</label>
+        <input type="password" id="password" name="password" placeholder="••••••••" required>
+      </div>
+
+      <button type="submit" class="btn-primary" id="submit-btn">Sign In</button>
+
+      <div class="auth-footer-links" style="display: flex; justify-content: space-between; align-items: center; margin-top: 16px; font-size: 0.85rem;">
+        <a href="#" id="forgot-password-link" class="text-muted">Forgot password?</a>
+        <a href="/register" class="text-muted">Need an account? <strong>Register</strong></a>
+      </div>
+
+      <div id="error-message" class="auth-message"></div>
     </form>
-    <div id="error-message" class="error-msg"></div>
+  </div>
 </div>
 
 <script type="module">
@@ -161,13 +70,15 @@
     const toggleBtn = document.getElementById('toggle-btn');
     const errorMessage = document.getElementById('error-message');
 
-    toggleBtn.addEventListener('click', () => {
-        isLoginMode = !isLoginMode;
-        formTitle.innerText = isLoginMode ? "Login" : "Register";
-        submitBtn.innerText = isLoginMode ? "Sign In" : "Sign Up";
-        toggleBtn.innerText = isLoginMode ? "Need an account? Register" : "Already have an account? Login";
-        errorMessage.innerText = "";
-    });
+    if (toggleBtn) {
+      toggleBtn.addEventListener('click', () => {
+          isLoginMode = !isLoginMode;
+          if (formTitle) formTitle.innerText = isLoginMode ? "Login" : "Register";
+          if (submitBtn) submitBtn.innerText = isLoginMode ? "Sign In" : "Sign Up";
+          toggleBtn.innerText = isLoginMode ? "Need an account? Register" : "Already have an account? Login";
+          if (errorMessage) errorMessage.innerText = "";
+      });
+    }
 
     authForm.addEventListener('submit', async (e) => {
         e.preventDefault();
@@ -207,9 +118,10 @@
     });
 
     // Forgot password handler - sends password reset email via Firebase
-    const forgotBtn = document.getElementById('forgot-btn');
+    const forgotBtn = document.getElementById('forgot-password-link');
     if (forgotBtn) {
-        forgotBtn.addEventListener('click', async () => {
+        forgotBtn.addEventListener('click', async (event) => {
+            event.preventDefault();
             const email = document.getElementById('email').value.trim();
             if (!email) {
                 return errorMessage.innerText = 'Enter your email above to receive a password reset link.';

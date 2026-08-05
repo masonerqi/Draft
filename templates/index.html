@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Draft • AI Meeting Summarizer</title>
-  <link rel="stylesheet" href="/static/style.css" />
+  <link rel="stylesheet" href="/static/css/main.css" />
   <script src="https://unpkg.com/lucide@latest"></script>
 </head>
 <body>
@@ -15,16 +15,39 @@
     <div class="sidebar-resizer" id="sidebar-resizer" aria-hidden="true"></div>
  
     <main class="main-content">
-      <header class="topbar"></header>
+      <header class="topbar">
+        <div class="topbar-copy">
+          <p class="eyebrow">Meeting workspace</p>
+          <h1 class="page-title">Your meeting notes, organised.</h1>
+          <p class="page-copy">Capture a conversation, find an earlier session, or pick up where you left off.</p>
+        </div>
+      </header>
 
-      <section class="panel" id="input-view">
-        <div class="section-title">
+      <section class="dashboard-view" id="home-view">
+        <div class="home-heading">
+          <div>
+            <h2>Recent notes</h2>
+            <p>Everything you have captured, in one place.</p>
+          </div>
+          <button type="button" class="btn-primary" id="home-record-btn">
+            <i data-lucide="mic"></i>
+            Capture recording
+          </button>
+        </div>
+        <ul class="history-list home-history-list" id="history-list">
+          <li class="history-empty">No notes yet. Start your first recording when you are ready.</li>
+        </ul>
+      </section>
+
+      <section class="card transcript-card hidden" id="input-view">
+        <div class="transcript-header" style="display:flex; justify-content:space-between; align-items:flex-start; gap:16px;">
           <div>
             <h2>Capture or paste a transcript</h2>
-            <p>Use the recorder or paste your notes to generate a refined meeting summary.</p>
+            <p class="text-muted">Use the recorder or paste your notes to generate a refined meeting summary.</p>
           </div>
-          <div class="status-pill" id="record-status-indicator">
-            <span class="status-dot"></span>
+
+          <div class="status-badge ready" id="record-status-indicator" style="display:inline-flex; align-items:center; gap:8px;">
+            <span class="dot" style="width:10px; height:10px; border-radius:50%; background:#34D399; display:inline-block;"></span>
             <span id="record-status-text">Ready</span>
             <span class="live-badge hidden" id="live-badge">Live</span>
           </div>
@@ -32,16 +55,31 @@
 
         <textarea class="transcription-textarea" id="transcript-input" placeholder="Type your notes or record live audio from the mic."></textarea>
 
-        <div class="action-row">
-          <button type="button" class="button-secondary text-button" id="clear-input-btn">
+        <div class="action-row" style="display:flex; justify-content:flex-end; gap:12px; margin-top:16px;">
+          <button type="button" class="btn-outline" id="clear-input-btn">
             <i data-lucide="refresh-cw"></i>
             Clear
           </button>
-          <button type="button" class="button" id="submit-transcript-btn">
+
+          <button type="button" class="btn-primary" id="submit-transcript-btn">
             <i data-lucide="sparkles"></i>
             Summarize
           </button>
         </div>
+      </section>
+
+      <section class="dashboard-view search-view hidden" id="search-view">
+        <div class="search-heading">
+          <h2>Search notes</h2>
+          <p>Find a previous meeting by its summary or date.</p>
+        </div>
+        <label class="search-box" for="session-search-input">
+          <i data-lucide="search"></i>
+          <input id="session-search-input" type="search" placeholder="Search your notes" autocomplete="off" />
+        </label>
+        <ul class="history-list home-history-list" id="search-results-list">
+          <li class="history-empty">Start typing to search your saved notes.</li>
+        </ul>
       </section>
 
       <section class="panel hidden" id="results">
@@ -114,23 +152,43 @@
   </div>
 
   <div class="modal hidden" id="settings-modal">
-    <div class="modal-panel">
-      <div class="modal-header">
-        <div>
-          <h2>Gemini API Key</h2>
-          <p>Store a personal Google AI Studio API key so your summary requests use your own account.</p>
+      <div class="modal-panel settings-panel">
+        <div class="modal-header">
+          <div>
+            <p class="eyebrow">Settings</p>
+            <h2>Your workspace</h2>
+            <p>Manage your account and the AI key used to create summaries.</p>
         </div>
         <button type="button" class="icon-button" id="settings-close-btn" aria-label="Close settings">
           <i data-lucide="x"></i>
         </button>
-      </div>
-      <div class="modal-body">
-        <div class="modal-field">
-          <label for="api-key-input">Gemini API key</label>
-          <input id="api-key-input" type="text" autocomplete="off" placeholder="Paste your Gemini API key here" />
         </div>
-        <p>Get your free API key from <a href="https://studio.google.com/" target="_blank" rel="noopener">Google AI Studio</a>.</p>
-        <div class="auth-error" id="settings-error"></div>
+        <div class="modal-body">
+          <section class="settings-section">
+            <h3>Profile</h3>
+            <div class="settings-profile">
+              <div class="profile-avatar" id="settings-profile-initials">D</div>
+              <div>
+                <strong id="settings-profile-name">Guest</strong>
+                <span id="settings-profile-email">Not signed in</span>
+              </div>
+            </div>
+          </section>
+          <section class="settings-section">
+            <h3>Password</h3>
+            <p>To keep your account secure, password resets are handled from the sign-in page.</p>
+            <a class="settings-link" href="/login">Go to sign in</a>
+          </section>
+          <section class="settings-section">
+            <h3>Gemini API key</h3>
+            <p>Use your personal Google AI Studio key for summaries.</p>
+          <div class="modal-field">
+            <label for="api-key-input">Gemini API key</label>
+            <input id="api-key-input" type="text" autocomplete="off" placeholder="Paste your Gemini API key here" />
+          </div>
+          <p>Get a key from <a href="https://studio.google.com/" target="_blank" rel="noopener">Google AI Studio</a>.</p>
+          </section>
+          <div class="auth-error" id="settings-error"></div>
         <p class="empty-note" id="settings-status"></p>
       </div>
       <div class="modal-footer">
@@ -142,7 +200,7 @@
     </div>
   </div>
 
-  <script src="/static/app.js" defer></script>
+  <script src="/static/app.js?v=2" defer></script>
   <script>lucide.createIcons();</script>
 </body>
 </html>
