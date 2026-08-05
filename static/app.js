@@ -81,17 +81,27 @@ async function fetchCurrentUser() {
 
 function showAppView(user) {
   state.currentUser = user;
+  
+  const displayName = getFormattedDisplayName(user);
+  const email = user.email || user.username || "Not signed in";
+
   if (elements.appShell) elements.appShell.classList.remove("hidden");
-  if (elements.profileName) elements.profileName.textContent = user.username;
-  if (elements.profileEmail) elements.profileEmail.textContent = user.username;
-  if (elements.profileInitials) elements.profileInitials.textContent = formatInitials(user.username);
+
+  // Update Main Sidebar Profile
+  if (elements.profileName) elements.profileName.textContent = displayName;
+  if (elements.profileEmail) elements.profileEmail.textContent = email;
+  if (elements.profileInitials) elements.profileInitials.textContent = formatInitials(displayName);
+
+  // Update Settings Modal Profile
   const settingsName = document.getElementById("settings-profile-name");
   const settingsEmail = document.getElementById("settings-profile-email");
   const settingsInitials = document.getElementById("settings-profile-initials");
-  if (settingsName) settingsName.textContent = user.username;
-  if (settingsEmail) settingsEmail.textContent = user.username;
-  if (settingsInitials) settingsInitials.textContent = formatInitials(user.username);
-  // Load user-specific data, but don't await here to allow quick UI response
+
+  if (settingsName) settingsName.textContent = displayName;
+  if (settingsEmail) settingsEmail.textContent = email;
+  if (settingsInitials) settingsInitials.textContent = formatInitials(displayName);
+
+  // Load user-specific data
   loadHistory();
   ensureApiKeySaved();
   showHome();
@@ -750,5 +760,6 @@ async function initializeApp() {
     window.location.href = "/login";
   }
 }
+
 
 initializeApp();

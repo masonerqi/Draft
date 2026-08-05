@@ -10,22 +10,33 @@ if not DB_PATH:
     DB_PATH = os.path.join(os.getcwd(), "data", "database.db")
 
 
+def get_db_connection():
+    """Helper function to establish a database connection with dictionary-like row access."""
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+
 def init_db():
     db_dir = os.path.dirname(DB_PATH)
     if db_dir and not os.path.exists(db_dir):
         os.makedirs(db_dir, exist_ok=True)
+        
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
+    
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS users (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             username TEXT UNIQUE NOT NULL,
             password_hash TEXT NOT NULL,
+            name TEXT,
             gemini_api_key TEXT,
             firebase_uid TEXT UNIQUE,
             created_at DATETIME NOT NULL
         )
     """)
+    
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS sessions (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -42,6 +53,7 @@ def init_db():
     """)
     conn.commit()
 
+    # Migration checks for existing databases
     cursor.execute("PRAGMA table_info(users)")
     user_columns = [row[1] for row in cursor.fetchall()]
     if "gemini_api_key" not in user_columns:
@@ -50,13 +62,15 @@ def init_db():
     if "firebase_uid" not in user_columns:
         cursor.execute("ALTER TABLE users ADD COLUMN firebase_uid TEXT")
         conn.commit()
+    if "name" not in user_columns:
+        cursor.execute("ALTER TABLE users ADD COLUMN name TEXT")
+        conn.commit()
 
     cursor.execute("PRAGMA table_info(sessions)")
     columns = [row[1] for row in cursor.fetchall()]
     if "transcript" not in columns:
         cursor.execute("ALTER TABLE sessions ADD COLUMN transcript TEXT")
         conn.commit()
-        columns.append("transcript")
     if "user_id" not in columns:
         cursor.execute("ALTER TABLE sessions ADD COLUMN user_id INTEGER")
         conn.commit()
@@ -162,13 +176,14 @@ def delete_session(session_id, user_id=None):
     conn.close()
 
 
-def create_user(username, password):
-    password_hash = generate_password_hash(password)
+def create_user(username, password, name=None, firebase_uid=None):
+    """Creates a new user record with optional name and firebase_uid."""
+    password_hash = generate_password_hash(password) if password else ""
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     cursor.execute(
-        "INSERT INTO users (username, password_hash, created_at) VALUES (?, ?, ?)",
-        (username, password_hash, datetime.now().isoformat())
+        "INSERT INTO users (username, password_hash, name, firebase_uid, created_at) VALUES (?, ?, ?, ?, ?)",
+        (username, password_hash, name, firebase_uid, datetime.now().isoformat())
     )
     conn.commit()
     user_id = cursor.lastrowid
@@ -179,67 +194,87 @@ def create_user(username, password):
 def get_user_by_firebase_uid(firebase_uid):
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
-    cursor.execute("SELECT id, username, password_hash, firebase_uid, created_at FROM users WHERE firebase_uid = ?", (firebase_uid,))
+    cursor.execute("SELECT id, username, password_hash, firebase_uid, name, created_at FROM users WHERE firebase_uid = ?", (firebase_uid,))
     row = cursor.fetchone()
     conn.close()
     if not row:
         return None
-    return {"id": row[0], "username": row[1], "password_hash": row[2], "firebase_uid": row[3], "created_at": row[4]}
+    return {"id": row[0], "username": row[1], "password_hash": row[2], "firebase_uid": row[3], "name": row[4], "created_at": row[5]}
 
 
 def get_user_by_email(email):
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
-    cursor.execute("SELECT id, username, password_hash, firebase_uid, created_at FROM users WHERE username = ?", (email,))
+    cursor.execute("SELECT id, username, password_hash, firebase_uid, name, created_at FROM users WHERE username = ?", (email,))
     row = cursor.fetchone()
     conn.close()
     if not row:
         return None
-    return {"id": row[0], "username": row[1], "password_hash": row[2], "firebase_uid": row[3], "created_at": row[4]}
+    return {"id": row[0], "username": row[1], "password_hash": row[2], "firebase_uid": row[3], "name": row[4], "created_at": row[5]}
 
 
-def create_or_get_user_from_firebase(firebase_uid, email=None):
+def create_or_get_user_from_firebase(firebase_uid, email=None, name=None):
+    """Retrieves an existing user or creates one if they don't exist yet."""
     # Try to find by firebase_uid first
     user = get_user_by_firebase_uid(firebase_uid)
     if user:
-        return user["id"]
+        if name and not user.get("name"):
+            # Update missing name if provided
+            conn = sqlite3.connect(DB_PATH)
+            cursor = conn.cursor()
+            cursor.execute("UPDATE users SET name = ? WHERE id = ?", (name, user["id"]))
+            conn.commit()
+            conn.close()
+            user["name"] = name
+        return user
+
     # Then try by email (stored in username)
     if email:
         user = get_user_by_email(email)
         if user:
-            # update firebase_uid for this user
             conn = sqlite3.connect(DB_PATH)
             cursor = conn.cursor()
-            cursor.execute("UPDATE users SET firebase_uid = ? WHERE id = ?", (firebase_uid, user["id"]))
+            if name and not user.get("name"):
+                cursor.execute("UPDATE users SET firebase_uid = ?, name = ? WHERE id = ?", (firebase_uid, name, user["id"]))
+            else:
+                cursor.execute("UPDATE users SET firebase_uid = ? WHERE id = ?", (firebase_uid, user["id"]))
             conn.commit()
             conn.close()
-            return user["id"]
+            user["firebase_uid"] = firebase_uid
+            if name:
+                user["name"] = name
+            return user
+
     # Create a new user using email as username
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
-    # create with empty password_hash since auth is via Firebase
+    username = email or f"firebase:{firebase_uid}"
     cursor.execute(
-        "INSERT INTO users (username, password_hash, firebase_uid, created_at) VALUES (?, ?, ?, ?)",
-        (email or f"firebase:{firebase_uid}", "", firebase_uid, datetime.now().isoformat())
+        "INSERT INTO users (username, password_hash, name, firebase_uid, created_at) VALUES (?, ?, ?, ?, ?)",
+        (username, "", name, firebase_uid, datetime.now().isoformat())
     )
     conn.commit()
     user_id = cursor.lastrowid
+    cursor.execute("SELECT id, username, password_hash, firebase_uid, name, created_at FROM users WHERE id = ?", (user_id,))
+    row = cursor.fetchone()
     conn.close()
-    return user_id
+    return {"id": row[0], "username": row[1], "password_hash": row[2], "firebase_uid": row[3], "name": row[4], "created_at": row[5]}
 
 
 def get_user_by_username(username):
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
-    cursor.execute("SELECT id, username, password_hash, created_at FROM users WHERE username = ?", (username,))
+    cursor.execute("SELECT id, username, password_hash, name, created_at FROM users WHERE username = ?", (username,))
     row = cursor.fetchone()
     conn.close()
     if not row:
         return None
-    return {"id": row[0], "username": row[1], "password_hash": row[2], "created_at": row[3]}
+    return {"id": row[0], "username": row[1], "password_hash": row[2], "name": row[3], "created_at": row[4]}
 
 
 def get_user_api_key(user_id):
+    # Always scope the API key lookup to the authenticated user's numeric id.
+    # This ensures no shared or global key is accidentally returned.
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     cursor.execute("SELECT gemini_api_key FROM users WHERE id = ?", (user_id,))
@@ -251,6 +286,7 @@ def get_user_api_key(user_id):
 
 
 def set_user_api_key(user_id, api_key):
+    # Store the provided API key only for the authenticated user's record.
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     cursor.execute("UPDATE users SET gemini_api_key = ? WHERE id = ?", (api_key, user_id))
@@ -261,12 +297,12 @@ def set_user_api_key(user_id, api_key):
 def get_user_by_id(user_id):
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
-    cursor.execute("SELECT id, username, password_hash, created_at FROM users WHERE id = ?", (user_id,))
+    cursor.execute("SELECT id, username, password_hash, name, created_at FROM users WHERE id = ?", (user_id,))
     row = cursor.fetchone()
     conn.close()
     if not row:
         return None
-    return {"id": row[0], "username": row[1], "password_hash": row[2], "created_at": row[3]}
+    return {"id": row[0], "username": row[1], "password_hash": row[2], "name": row[3], "created_at": row[4]}
 
 
 def authenticate_user(username, password):

@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>{% if show_register %}Register{% else %}Sign in{% endif %} · Draft</title>
   <link rel="stylesheet" href="/static/css/main.css?v=3" />
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/auth.css') }}?v=1" />
 </head>
 <body>
   <main class="auth-wrapper">
@@ -15,24 +16,34 @@
         <h1>Create your account</h1>
         <p class="auth-intro">Save, search, and revisit your meeting summaries.</p>
 
-        <form method="POST" action="{{ url_for('auth.register') }}" id="register-form">
+        <form id="auth-form">
           <div class="form-group">
-            <label for="reg-email">Email</label>
-            <input type="email" id="reg-email" name="email" placeholder="you@example.com" autocomplete="email" required />
+            <label for="name">Full Name</label>
+            <input 
+              type="text" 
+              id="name" 
+              name="name" 
+              placeholder="Alex Morgan" 
+              autocomplete="name" 
+              required 
+            />
           </div>
 
           <div class="form-group">
-            <label for="reg-password">Password</label>
-            <input type="password" id="reg-password" name="password" placeholder="Choose a password" autocomplete="new-password" minlength="6" required />
+            <label for="email">Email</label>
+            <input type="email" id="email" name="email" placeholder="you@example.com" autocomplete="email" required />
           </div>
 
-          <button type="submit" class="btn-primary">Create account</button>
+          <div class="form-group">
+            <label for="password">Password</label>
+            <input type="password" id="password" name="password" placeholder="Choose a password" autocomplete="new-password" minlength="6" required />
+          </div>
+
+          <button type="submit" class="btn-primary" id="submit-btn">Create account</button>
           <p class="auth-switch">Already have an account? <a href="{{ url_for('auth.login_page') }}">Sign in</a></p>
-
-          {% if register_error %}
-            <p class="auth-message error" role="alert">{{ register_error }}</p>
-          {% endif %}
+          <p id="error-message" class="auth-message" role="alert"></p>
         </form>
+
       {% else %}
         <h1>Welcome back</h1>
         <p class="auth-intro">Sign in to continue to your meeting workspace.</p>
@@ -50,7 +61,6 @@
 
           <button type="submit" class="btn-primary" id="submit-btn">Sign in</button>
 
-          <!-- 1. Google Sign-In Button & Divider placed HERE -->
           <div class="auth-divider"><span>OR</span></div>
 
           <button type="button" id="google-btn" class="btn-secondary">
@@ -58,7 +68,6 @@
             Continue with Google
           </button>
 
-          <!-- 2. Footer Links -->
           <div class="auth-footer-links">
             <a href="#" id="forgot-password-link">Forgot password?</a>
             <a href="{{ url_for('auth.register') }}">Create account</a>
@@ -70,42 +79,63 @@
     </section>
   </main>
 
-  {% if not show_register %}
-    <script type="module">
-      import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-app.js";
-      import { 
-        getAuth, 
-        sendPasswordResetEmail, 
-        signInWithEmailAndPassword,
-        GoogleAuthProvider,
-        signInWithPopup 
-      } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-auth.js";
+  <script type="module">
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-app.js";
+    import { 
+      getAuth, 
+      sendPasswordResetEmail, 
+      signInWithEmailAndPassword,
+      createUserWithEmailAndPassword,
+      updateProfile,
+      GoogleAuthProvider,
+      signInWithPopup 
+    } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-auth.js";
 
-      const firebaseConfig = {
-        apiKey: "AIzaSyAf8ytTTyQo5ndX7PcetZFyp1W9ubs2aH4",
-        authDomain: "draft-d36c3.firebaseapp.com",
-        projectId: "draft-d36c3",
-        storageBucket: "draft-d36c3.firebasestorage.app",
-        messagingSenderId: "461424094330",
-        appId: "1:461424094330:web:899ba79be001a2a843dfc3",
-        measurementId: "G-K8YTKBYCC0"
-      };
+    const firebaseConfig = {
+      apiKey: "AIzaSyAf8ytTTyQo5ndX7PcetZFyp1W9ubs2aH4",
+      authDomain: "draft-d36c3.firebaseapp.com",
+      projectId: "draft-d36c3",
+      storageBucket: "draft-d36c3.firebasestorage.app",
+      messagingSenderId: "461424094330",
+      appId: "1:461424094330:web:899ba79be001a2a843dfc3",
+      measurementId: "G-K8YTKBYCC0"
+    };
 
-      const auth = getAuth(initializeApp(firebaseConfig));
-      const authForm = document.getElementById("auth-form");
-      const errorMessage = document.getElementById("error-message");
+    const auth = getAuth(initializeApp(firebaseConfig));
+    const authForm = document.getElementById("auth-form");
+    const errorMessage = document.getElementById("error-message");
+    const submitBtn = document.getElementById("submit-btn");
+    const isRegisterPage = "{{ 'true' if show_register else 'false' }}" === "true";
 
+    function setStatus(msg, isError = true) {
+      errorMessage.textContent = msg;
+      errorMessage.classList.toggle("auth-message--success", !isError);
+    }
+
+    function parseAuthError(code) {
+      switch (code) {
+        case 'auth/email-already-in-use':
+          return 'An account with this email already exists.';
+        case 'auth/invalid-credential':
+        case 'auth/wrong-password':
+        case 'auth/user-not-found':
+          return 'Invalid email or password.';
+        case 'auth/weak-password':
+          return 'Password should be at least 6 characters long.';
+        default:
+          return null;
+      }
+    }
+
+    // Google Sign-In Handler
+    const googleBtn = document.getElementById("google-btn");
+    if (googleBtn) {
       const googleProvider = new GoogleAuthProvider();
-
-      document.getElementById("google-btn").addEventListener("click", async () => {
+      googleBtn.addEventListener("click", async () => {
         try {
-          // 1. Trigger Google Popup
           const result = await signInWithPopup(auth, googleProvider);
-          
-          // 2. Extract Firebase ID Token
           const token = await result.user.getIdToken();
 
-          // 3. Send token to your existing Flask backend
           const response = await fetch("/login", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
@@ -118,58 +148,94 @@
             throw new Error(data.message || "Server authentication failed.");
           }
 
-          // 4. Redirect to home on success
           window.location.href = "/";
         } catch (error) {
           console.error("Google Auth Error:", error);
-          errorMessage.textContent = error.message;
+          setStatus(parseAuthError(error.code) || error.message);
         }
       });
+    }
 
+    // Form Submission Handler
+    if (authForm) {
       authForm.addEventListener("submit", async (event) => {
         event.preventDefault();
-        errorMessage.textContent = "";
+        setStatus("");
+        submitBtn.disabled = true;
 
-        const email = document.getElementById("email").value.trim();
-        const password = document.getElementById("password").value;
+        const email = document.getElementById("email")?.value.trim();
+        const password = document.getElementById("password")?.value;
 
         try {
-          const userCredential = await signInWithEmailAndPassword(auth, email, password);
-          const token = await userCredential.user.getIdToken();
-          const response = await fetch("/login", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            credentials: "same-origin",
-            body: JSON.stringify({ token })
-          });
+          if (isRegisterPage) {
+            const name = document.getElementById("name").value.trim();
 
-          if (!response.ok) {
-            const data = await response.json();
-            throw new Error(data.message || "Authentication failed on the server.");
+            const userCredential = await createUserWithEmailAndPassword(auth, email, password);
+            
+            // Sync display name to Firebase profile
+            await updateProfile(userCredential.user, { displayName: name });
+
+            const token = await userCredential.user.getIdToken();
+
+            const response = await fetch("/register", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              credentials: "same-origin",
+              body: JSON.stringify({ token, name })
+            });
+
+            if (!response.ok) {
+              const data = await response.json();
+              throw new Error(data.message || "Registration failed on the server.");
+            }
+
+            window.location.href = "/";
+          } else {
+            const userCredential = await signInWithEmailAndPassword(auth, email, password);
+            const token = await userCredential.user.getIdToken();
+
+            const response = await fetch("/login", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              credentials: "same-origin",
+              body: JSON.stringify({ token })
+            });
+
+            if (!response.ok) {
+              const data = await response.json();
+              throw new Error(data.message || "Login failed on the server.");
+            }
+
+            window.location.href = "/";
           }
-          window.location.href = "/";
         } catch (error) {
-          errorMessage.textContent = error.message;
+          console.error("Auth Error:", error);
+          setStatus(parseAuthError(error.code) || error.message);
+        } finally {
+          submitBtn.disabled = false;
         }
       });
+    }
 
-      document.getElementById("forgot-password-link").addEventListener("click", async (event) => {
+    // Password Reset Handler
+    const forgotLink = document.getElementById("forgot-password-link");
+    if (forgotLink) {
+      forgotLink.addEventListener("click", async (event) => {
         event.preventDefault();
-        const email = document.getElementById("email").value.trim();
+        const email = document.getElementById("email")?.value.trim();
         if (!email) {
-          errorMessage.textContent = "Enter your email above to receive a password reset link.";
+          setStatus("Enter your email above to receive a password reset link.");
           return;
         }
 
         try {
           await sendPasswordResetEmail(auth, email);
-          errorMessage.textContent = "Password reset email sent. Check your inbox.";
+          setStatus("Password reset email sent. Check your inbox.", false);
         } catch (error) {
-          errorMessage.textContent = error.message;
+          setStatus(parseAuthError(error.code) || error.message);
         }
       });
-    </script>
-  {% endif %}
+    }
+  </script>
 </body>
 </html>
-

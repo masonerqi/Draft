@@ -14,14 +14,20 @@
     {% include "sidebar.html" %}
     <div class="sidebar-resizer" id="sidebar-resizer" aria-hidden="true"></div>
  
-    <main class="main-content">
-      <header class="topbar">
-        <div class="topbar-copy">
-          <p class="eyebrow">Meeting workspace</p>
-          <h1 class="page-title">Your meeting notes, organised.</h1>
-          <p class="page-copy">Capture a conversation, find an earlier session, or pick up where you left off.</p>
-        </div>
-      </header>
+      <main class="main-content">
+        <header class="topbar">
+          <div class="topbar-copy">
+            <p class="eyebrow">Your meeting notes, organised.</p>
+            <h1 class="page-title">
+              {% if user_name %}
+                Howdy, {{ user_name }}! 👋
+              {% else %}
+                Howdy! 👋
+              {% endif %}
+            </h1>
+            <p class="page-copy">Capture a conversation, find an earlier session, or pick up where you left off.</p>
+          </div>
+        </header>
 
       {% include "home.html" %}
       {% include "note.html" %}

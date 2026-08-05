@@ -1,11 +1,9 @@
 import json
-import os
-from dotenv import load_dotenv
 from google import genai
 from google.genai import types
 
-load_dotenv()
-
+# Do not configure Gemini globally. Each request must pass a user-specific
+# API key into the client builder so keys are isolated per authenticated user.
 
 def _resolve_api_key(user_api_key=None):
     if user_api_key:

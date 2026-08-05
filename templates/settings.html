@@ -1,15 +1,69 @@
 <div class="modal hidden" id="settings-modal">
   <div class="modal-panel settings-panel">
     <div class="modal-header">
-      <div><p class="eyebrow">Settings</p><h2>Your workspace</h2><p>Manage your account and the AI key used to create summaries.</p></div>
-      <button type="button" class="icon-button" id="settings-close-btn" aria-label="Close settings"><i data-lucide="x"></i></button>
+      <div>
+        <p class="eyebrow">Settings</p>
+        <h2>Your workspace</h2>
+        <p>Manage your account and the AI key used to create summaries.</p>
+      </div>
+      <button type="button" class="icon-button" id="settings-close-btn" aria-label="Close settings">
+        <i data-lucide="x"></i>
+      </button>
     </div>
     <div class="modal-body">
-      <section class="settings-section"><h3>Profile</h3><div class="settings-profile"><div class="profile-avatar" id="settings-profile-initials">D</div><div><strong id="settings-profile-name">Guest</strong><span id="settings-profile-email">Not signed in</span></div></div></section>
-      <section class="settings-section"><h3>Reset Password</h3><p>To keep your account secure, password resets are handled from the sign-in page.</p><a class="settings-link" href="/login">Go to sign in</a></section>
-      <section class="settings-section"><h3>Gemini API key</h3><p>Use your personal Google AI Studio key for summaries.</p><div class="modal-field"><label for="api-key-input">Gemini API key</label><input id="api-key-input" type="text" autocomplete="off" placeholder="Paste your Gemini API key here" /></div><p>Get a FREE key from <a href="https://aistudio.google.com/api-keys" target="_blank" rel="noopener">Google AI Studio</a>.</p></section>
-      <div class="auth-error" id="settings-error"></div><p class="empty-note" id="settings-status"></p>
+      <section class="settings-section">
+        <h3>Profile</h3>
+        <div class="settings-profile">
+          {% set name = user_name or session.get('user_name') %}
+          {% set email = user_email or session.get('user_email') %}
+
+          <div class="profile-avatar" id="settings-profile-initials">
+            {% if name and name != email %}
+              {{ name[0] | upper }}
+            {% elif email %}
+              {{ email[0] | upper }}
+            {% else %}
+              G
+            {% endif %}
+          </div>
+          <div>
+            <strong id="settings-profile-name">
+              {% if name and name != email %}
+                {{ name }}
+              {% elif email %}
+                {{ email.split('@')[0] | replace('.', ' ') | title }}
+              {% else %}
+                Guest
+              {% endif %}
+            </strong>
+            <span id="settings-profile-email">{{ email or 'Not signed in' }}</span>
+          </div>
+        </div>
+      </section>
+
+      <section class="settings-section">
+        <h3>Reset Password</h3>
+        <p>To keep your account secure, password resets are handled from the sign-in page.</p>
+        <a class="settings-link" href="/login">Go to sign in</a>
+      </section>
+
+      <section class="settings-section">
+        <h3>Gemini API key</h3>
+        <p>Use your personal Google AI Studio key for summaries.</p>
+        <div class="modal-field">
+          <label for="api-key-input">Gemini API key</label>
+          <input id="api-key-input" type="text" autocomplete="off" placeholder="Paste your Gemini API key here" />
+        </div>
+        <p>Get a FREE key from <a href="https://aistudio.google.com/api-keys" target="_blank" rel="noopener">Google AI Studio</a>.</p>
+      </section>
+
+      <div class="auth-error" id="settings-error"></div>
+      <p class="empty-note" id="settings-status"></p>
     </div>
-    <div class="modal-footer"><button type="button" class="button" id="settings-save-btn"><i data-lucide="save"></i>Save key</button></div>
+    <div class="modal-footer">
+      <button type="button" class="button" id="settings-save-btn">
+        <i data-lucide="save"></i>Save key
+      </button>
+    </div>
   </div>
 </div>

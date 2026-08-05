@@ -18,6 +18,8 @@ def summarise():
     current_user = get_current_user()
     from database import get_user_api_key
 
+    # Retrieve the Gemini API key scoped to the currently authenticated user.
+    # This prevents any shared or global API key from being used for another account.
     user_api_key = get_user_api_key(current_user["id"])
     if not user_api_key:
         return jsonify({"error": "No Gemini API key configured. Save your personal Google AI Studio key in Settings."}), 400
