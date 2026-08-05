@@ -27,3 +27,53 @@
 .auth-card h1 { margin: 0 0 10px; font-size: 28px; }
 .auth-field input { width: 100%; padding: 14px 16px; border: 1px solid var(--border); border-radius: 14px; background: var(--bg-muted); }
 .auth-error { min-height: 20px; color: #B91C1C; font-size: 13px; margin-bottom: 12px; }
+
+.auth-divider {
+  display: flex;
+  align-items: center;
+  text-align: center;
+  margin: 16px 0;
+  color: #888;
+  font-size: 0.8rem;
+}
+
+.auth-divider::before,
+.auth-divider::after {
+  content: '';
+  flex: 1;
+  border-bottom: 1px solid #e0e0e0;
+}
+
+.auth-divider span {
+  padding: 0 10px;
+}
+
+/* Full-width, centered Google button */
+#google-btn {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 10px 16px;
+  background-color: #ffffff;
+  border: 1px solid #d0d5dd;
+  border-radius: 8px; /* Match your input/button border radius */
+  font-size: 0.95rem;
+  font-weight: 500;
+  color: #344054;
+  cursor: pointer;
+  transition: background-color 0.2s ease, border-color 0.2s ease;
+  box-sizing: border-box;
+}
+
+#google-btn:hover {
+  background-color: #f9fafb;
+  border-color: #b0b7c3;
+}
+
+#google-btn img {
+  width: 18px;
+  height: 18px;
+  margin-right: 10px;
+  flex-shrink: 0;
+}

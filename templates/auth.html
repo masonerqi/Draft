@@ -49,10 +49,21 @@
           </div>
 
           <button type="submit" class="btn-primary" id="submit-btn">Sign in</button>
+
+          <!-- 1. Google Sign-In Button & Divider placed HERE -->
+          <div class="auth-divider"><span>OR</span></div>
+
+          <button type="button" id="google-btn" class="btn-secondary">
+            <img src="https://www.gstatic.com/firebasejs/ui/2.0.0/images/auth/google.svg" alt="Google logo" style="width:18px; margin-right:8px; vertical-align:middle;" />
+            Continue with Google
+          </button>
+
+          <!-- 2. Footer Links -->
           <div class="auth-footer-links">
             <a href="#" id="forgot-password-link">Forgot password?</a>
-            <a href="/register">Create account</a>
+            <a href="{{ url_for('auth.register') }}">Create account</a>
           </div>
+
           <p id="error-message" class="auth-message" role="alert"></p>
         </form>
       {% endif %}
@@ -62,7 +73,13 @@
   {% if not show_register %}
     <script type="module">
       import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-app.js";
-      import { getAuth, sendPasswordResetEmail, signInWithEmailAndPassword } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-auth.js";
+      import { 
+        getAuth, 
+        sendPasswordResetEmail, 
+        signInWithEmailAndPassword,
+        GoogleAuthProvider,
+        signInWithPopup 
+      } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-auth.js";
 
       const firebaseConfig = {
         apiKey: "AIzaSyAf8ytTTyQo5ndX7PcetZFyp1W9ubs2aH4",
@@ -77,6 +94,37 @@
       const auth = getAuth(initializeApp(firebaseConfig));
       const authForm = document.getElementById("auth-form");
       const errorMessage = document.getElementById("error-message");
+
+      const googleProvider = new GoogleAuthProvider();
+
+      document.getElementById("google-btn").addEventListener("click", async () => {
+        try {
+          // 1. Trigger Google Popup
+          const result = await signInWithPopup(auth, googleProvider);
+          
+          // 2. Extract Firebase ID Token
+          const token = await result.user.getIdToken();
+
+          // 3. Send token to your existing Flask backend
+          const response = await fetch("/login", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            credentials: "same-origin",
+            body: JSON.stringify({ token })
+          });
+
+          if (!response.ok) {
+            const data = await response.json();
+            throw new Error(data.message || "Server authentication failed.");
+          }
+
+          // 4. Redirect to home on success
+          window.location.href = "/";
+        } catch (error) {
+          console.error("Google Auth Error:", error);
+          errorMessage.textContent = error.message;
+        }
+      });
 
       authForm.addEventListener("submit", async (event) => {
         event.preventDefault();
@@ -124,3 +172,4 @@
   {% endif %}
 </body>
 </html>
+
