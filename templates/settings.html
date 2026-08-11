@@ -1,69 +1,145 @@
 <div class="modal hidden" id="settings-modal">
   <div class="modal-panel settings-panel">
-    <div class="modal-header">
-      <div>
-        <p class="eyebrow">Settings</p>
-        <h2>Your workspace</h2>
-        <p>Manage your account and the AI key used to create summaries.</p>
-      </div>
+    <div class="settings-topbar">
       <button type="button" class="icon-button" id="settings-close-btn" aria-label="Close settings">
-        <i data-lucide="x"></i>
+        <i data-lucide="arrow-left"></i>
       </button>
+      <span class="settings-topbar-title">Settings</span>
     </div>
-    <div class="modal-body">
-      <section class="settings-section">
-        <h3>Profile</h3>
-        <div class="settings-profile">
-          {% set name = user_name or session.get('user_name') %}
-          {% set email = user_email or session.get('user_email') %}
 
-          <div class="profile-avatar" id="settings-profile-initials">
-            {% if name and name != email %}
-              {{ name[0] | upper }}
-            {% elif email %}
-              {{ email[0] | upper }}
-            {% else %}
-              G
-            {% endif %}
-          </div>
-          <div>
-            <strong id="settings-profile-name">
-              {% if name and name != email %}
-                {{ name }}
-              {% elif email %}
-                {{ email.split('@')[0] | replace('.', ' ') | title }}
-              {% else %}
-                Guest
-              {% endif %}
-            </strong>
-            <span id="settings-profile-email">{{ email or 'Not signed in' }}</span>
+    <div class="settings-layout">
+      <nav class="settings-nav">
+        {% set name = user_name or session.get('user_name') %}
+        {% set email = user_email or session.get('user_email') %}
+
+        <div class="profile-card settings-nav-profile">
+          <div class="profile-avatar" id="settings-profile-initials">{{ (name[0] if (name and name != email) else (email[0] if email else 'G')) | upper }}</div>
+          <div class="profile-details">
+            <span class="profile-name" id="settings-profile-name">{{ name if (name and name != email) else ((email.split('@')[0] | replace('.', ' ') | title) if email else 'Guest') }}</span>
+            <span class="profile-email" id="settings-profile-email">{{ email or 'Not signed in' }}</span>
           </div>
         </div>
-      </section>
 
-      <section class="settings-section">
-        <h3>Reset Password</h3>
-        <p>To keep your account secure, password resets are handled from the sign-in page.</p>
-        <a class="settings-link" href="/login">Go to sign in</a>
-      </section>
+        <button type="button" class="nav-item settings-nav-item active" data-settings-tab="profile">
+          <i data-lucide="user"></i>
+          <span>Profile</span>
+        </button>
+        <button type="button" class="nav-item settings-nav-item" data-settings-tab="preferences">
+          <i data-lucide="sliders-horizontal"></i>
+          <span>Preferences</span>
+        </button>
+        <button type="button" class="nav-item settings-nav-item" data-settings-tab="api-key">
+          <i data-lucide="key-round"></i>
+          <span>API Key</span>
+        </button>
+      </nav>
 
-      <section class="settings-section">
-        <h3>Gemini API key</h3>
-        <p>Use your personal Google AI Studio key for summaries.</p>
-        <div class="modal-field">
-          <label for="api-key-input">Gemini API key</label>
-          <input id="api-key-input" type="text" autocomplete="off" placeholder="Paste your Gemini API key here" />
-        </div>
-        <p>Get a FREE key from <a href="https://aistudio.google.com/api-keys" target="_blank" rel="noopener">Google AI Studio</a>.</p>
-      </section>
+      <div class="settings-content">
+        <section class="settings-tab-panel" data-settings-panel="profile">
+          <h2>Profile</h2>
+          <p class="settings-panel-copy">Your account details.</p>
 
-      <div class="auth-error" id="settings-error"></div>
-      <p class="empty-note" id="settings-status"></p>
-    </div>
-    <div class="modal-footer">
-      <button type="button" class="button" id="settings-save-btn">
-        <i data-lucide="save"></i>Save key
-      </button>
+          <div class="settings-card">
+            <div class="settings-card-heading">
+              <h3>Email Address</h3>
+              <span class="status-pill status-pill--warning hidden" id="email-verify-badge">Unverified</span>
+            </div>
+            <p>Changing your email requires confirming a verification link sent to the new address.</p>
+
+            <div class="modal-field" id="email-address-field">
+              <input id="email-address-input" type="email" autocomplete="email" value="{{ email or '' }}" />
+            </div>
+
+            <div class="google-account-row hidden" id="google-account-note">
+              <img src="https://www.gstatic.com/firebasejs/ui/2.0.0/images/auth/google.svg" alt="" />
+              <div class="google-account-text">
+                <span class="google-account-email" id="google-account-email"></span>
+                <span class="google-account-caption">Managed by your Google Account</span>
+              </div>
+            </div>
+
+            <div class="auth-error" id="email-update-error"></div>
+            <p class="settings-banner hidden" id="email-update-banner"></p>
+
+            <div class="settings-card-actions">
+              <button type="button" class="button" id="update-email-btn">
+                <i data-lucide="mail"></i>Update Email
+              </button>
+              <button type="button" class="settings-link hidden" id="resend-verification-btn">
+                Resend verification email
+              </button>
+            </div>
+          </div>
+
+          <div class="settings-card">
+            <div class="settings-row">
+              <div>
+                <h3>Reset Password</h3>
+                <p>Handled from the sign-in page.</p>
+              </div>
+              <a class="settings-link" href="/login">Go to sign in</a>
+            </div>
+          </div>
+
+          <div class="settings-card settings-card--danger">
+            <h3>Danger Zone</h3>
+            <p>Permanently delete your account, saved notes, summaries, audio uploads, and settings. This action cannot be undone.</p>
+            <button type="button" class="btn-danger" id="delete-account-btn">
+              <i data-lucide="trash-2"></i>Delete Account
+            </button>
+          </div>
+        </section>
+
+        <section class="settings-tab-panel hidden" data-settings-panel="preferences">
+          <h2>Preferences</h2>
+          <p class="settings-panel-copy">Choose how Draft operates.</p>
+
+          <div class="settings-card">
+            <h3>Appearance</h3>
+            <div class="theme-toggle" role="radiogroup" aria-label="Theme">
+              <button type="button" class="theme-option" id="theme-light-btn" role="radio" aria-checked="false">
+                <img class="theme-option-preview" src="{{ url_for('static', filename='images/Light_Sample.png') }}" alt="Light mode preview" />
+                <span class="theme-option-label"><i data-lucide="sun"></i>Light</span>
+              </button>
+              <button type="button" class="theme-option" id="theme-dark-btn" role="radio" aria-checked="false">
+                <img class="theme-option-preview" src="{{ url_for('static', filename='images/Dark_Sample.png') }}" alt="Dark mode preview" />
+                <span class="theme-option-label"><i data-lucide="moon"></i>Dark</span>
+              </button>
+            </div>
+          </div>
+
+          <div class="settings-card">
+            <h3>Summary language</h3>
+            <p>Select the language you want your notes to be generated in.</p>
+            <div class="dropdown-wrap" id="summary-language-wrap">
+              <button type="button" class="dropdown-trigger" id="summary-language-trigger">
+                <i data-lucide="languages"></i>
+                <span id="summary-language-label">Match transcript language</span>
+                <i data-lucide="chevron-down"></i>
+              </button>
+              <ul class="dropdown-menu hidden" id="summary-language-menu" role="listbox" aria-label="Summary language"></ul>
+            </div>
+          </div>
+        </section>
+
+        <section class="settings-tab-panel hidden" data-settings-panel="api-key">
+          <h2>API key</h2>
+          <p class="settings-panel-copy">Use your personal Google AI Studio key for summaries.</p>
+
+          <div class="settings-card">
+            <h3>Gemini API key</h3>
+            <div class="modal-field">
+              <input id="api-key-input" type="text" autocomplete="off" placeholder="Paste your Gemini API key here" />
+            </div>
+            <p>Get a FREE key from <a href="https://aistudio.google.com/api-keys" target="_blank" rel="noopener">Google AI Studio</a>.</p>
+            <div class="auth-error" id="settings-error"></div>
+            <p class="empty-note" id="settings-status"></p>
+            <button type="button" class="button" id="settings-save-btn">
+              <i data-lucide="save"></i>Save key
+            </button>
+          </div>
+        </section>
+      </div>
     </div>
   </div>
 </div>

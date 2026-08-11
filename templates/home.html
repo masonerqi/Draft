@@ -1,3 +1,17 @@
+<header class="topbar" id="home-topbar">
+  <div class="topbar-copy">
+    <p class="eyebrow">Your meeting notes, organised.</p>
+    <h1 class="page-title">
+      {% if user_name %}
+        Howdy, {{ user_name }}! 👋
+      {% else %}
+        Howdy! 👋
+      {% endif %}
+    </h1>
+    <p class="page-copy">Capture a conversation, find an earlier session, or pick up where you left off.</p>
+  </div>
+</header>
+
 <section class="dashboard-view" id="home-view">
   <div class="home-heading">
     <div>

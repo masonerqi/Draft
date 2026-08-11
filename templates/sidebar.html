@@ -1,13 +1,17 @@
 <aside class="sidebar">
   <div class="sidebar-top">
-    <a class="brand" href="/" aria-label="Draft home">
-      <img src="{{ url_for('static', filename='images/draft_logo.png') }}" alt="Draft" style="width: 80px; height: auto;" />
-    </a>
+    <div class="sidebar-actions">
+      <button type="button" class="sidebar-button" id="new-session-btn">
+        <i data-lucide="plus"></i>
+        <span>New note</span>
+      </button>
 
-    <button type="button" class="sidebar-button" id="new-session-btn">
-      <i data-lucide="plus"></i>
-      <span>New note</span>
-    </button>
+      <input type="file" id="media-file-input" accept="audio/*,video/*" hidden />
+      <button type="button" class="sidebar-button-outline" id="import-file-btn">
+        <i data-lucide="upload"></i>
+        <span>Import file</span>
+      </button>
+    </div>
 
     <div class="sidebar-section">
       <button type="button" class="nav-item active" id="nav-home-btn">
@@ -18,17 +22,36 @@
         <i data-lucide="search"></i>
         <span>Search</span>
       </button>
-      <button type="button" class="nav-item" id="settings-btn">
-        <i data-lucide="settings-2"></i>
-        <span>Settings</span>
+
+      <div class="sidebar-divider"></div>
+      <div class="sidebar-label">Folders</div>
+      <ul class="folder-list" id="folder-list"></ul>
+      <button type="button" class="nav-item" id="create-folder-btn">
+        <i data-lucide="folder-plus"></i>
+        <span>Create new folder</span>
       </button>
     </div>
   </div>
 
-  <div class="sidebar-footer">
-    <button type="button" class="sign-out-button" id="logout-btn">
-      <i data-lucide="log-out"></i>
-      <span>Sign out</span>
+  <div class="sidebar-bottom">
+    <button type="button" class="nav-item" id="settings-btn">
+      <i data-lucide="settings-2"></i>
+      <span>Settings</span>
     </button>
+
+    <div class="sidebar-footer">
+      {% set name = user_name or session.get('user_name') %}
+      {% set email = user_email or session.get('user_email') %}
+      <div class="profile-card">
+        <div class="profile-avatar" id="profile-initials">{{ (name[0] if (name and name != email) else (email[0] if email else 'D')) | upper }}</div>
+        <div class="profile-details">
+          <span class="profile-name" id="profile-name">{{ name if (name and name != email) else ((email.split('@')[0] | replace('.', ' ') | title) if email else 'Guest') }}</span>
+          <span class="profile-email" id="profile-email">{{ email or 'Not signed in' }}</span>
+        </div>
+      </div>
+      <button type="button" class="icon-button" id="logout-btn" title="Sign out" aria-label="Sign out">
+        <i data-lucide="log-out"></i>
+      </button>
+    </div>
   </div>
 </aside>

@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Draft — Audio turned into action, effortlessly</title>
+  <meta name="description" content="Draft records, transcribes, and summarizes your meetings and calls — so you walk away with decisions and action items, not just notes." />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" />
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/landing.css') }}?v=2" />
+  <script src="https://unpkg.com/lucide@latest"></script>
+</head>
+<body class="landing">
+
+  <header class="landing-nav-wrapper">
+    <nav class="landing-nav">
+      <a href="/" class="landing-logo">
+        <img src="{{ url_for('static', filename='images/logo_black.svg') }}" alt="Draft" />
+      </a>
+
+      <div class="landing-nav-links">
+        <a href="#home">Home</a>
+        <a href="#features">Features</a>
+        <a href="#about">About</a>
+      </div>
+
+      <div class="landing-nav-cta">
+        <a href="{{ url_for('auth.login_page') }}" class="btn-ghost">Log In</a>
+        <a href="{{ url_for('auth.register') }}" class="btn-pill-dark">Try Draft Free</a>
+      </div>
+    </nav>
+  </header>
+
+  <main>
+    <section class="hero" id="home">
+      <p class="hero-eyebrow">AI meeting workspace</p>
+      <h1 class="hero-title">Audio turned into<br />action, effortlessly.</h1>
+      <p class="hero-tagline">
+        Draft records, transcribes, and summarizes every conversation — so you walk away
+        with clear decisions and next steps, not just a pile of notes.
+      </p>
+
+      <div class="hero-cta">
+        <a href="{{ url_for('auth.register') }}" class="btn-pill-dark btn-lg">Try Draft Free</a>
+        <a href="#features" class="btn-ghost btn-lg">See how it works</a>
+      </div>
+
+      <div class="hero-preview">
+        <div class="preview-card">
+          <div class="preview-card-header">
+            <div class="preview-dots"><span></span><span></span><span></span></div>
+            <span class="preview-status"><span class="dot"></span> Recording</span>
+          </div>
+          <div class="preview-body">
+            <div class="preview-transcript">
+              <p class="preview-line"><strong>You:</strong> Let's finalize the launch checklist before Friday.</p>
+              <p class="preview-line"><strong>Sam:</strong> I'll own the release notes and QA sign-off.</p>
+              <p class="preview-line"><strong>You:</strong> Great — I'll follow up with marketing on timing.</p>
+              <p class="preview-line"><strong>Priya:</strong> I can have the deck ready by Wednesday.</p>
+            </div>
+            <div class="preview-summary">
+              <h4>Action Items</h4>
+              <ul>
+                <li>Sam — Finish QA sign-off by Thursday</li>
+                <li>You — Confirm marketing timing</li>
+                <li>Priya — Share deck Wednesday</li>
+                <li>Team — Ship checklist Friday</li>
+              </ul>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="features" id="features">
+      <p class="section-eyebrow">Features</p>
+      <h2 class="section-title">Everything a conversation needs, handled.</h2>
+
+      <div class="features-grid">
+        <article class="feature-card">
+          <div class="feature-icon"><i data-lucide="mic"></i></div>
+          <h3>Live Recording</h3>
+          <p>Capture meetings and calls in one tap, with transcription running quietly in the background.</p>
+        </article>
+
+        <article class="feature-card">
+          <div class="feature-icon"><i data-lucide="languages"></i></div>
+          <h3>Multiple Languages</h3>
+          <p>Draft understands every voice in the room, and summarizes it.</p>
+        </article>
+
+        <article class="feature-card">
+          <div class="feature-icon"><i data-lucide="upload"></i></div>
+          <h3>Media Uploads</h3>
+          <p>Drop in an existing audio or video file and get the same structured summary in minutes.</p>
+        </article>
+
+        <article class="feature-card">
+          <div class="feature-icon"><i data-lucide="sparkles"></i></div>
+          <h3>AI Summaries</h3>
+          <p>Key points, decisions, and action items — extracted automatically and ready to share.</p>
+        </article>
+      </div>
+    </section>
+
+    <section class="cta-band" id="about">
+      <h2>Spend less time writing notes.<br />Spend more time in the conversation.</h2>
+      <a href="{{ url_for('auth.register') }}" class="btn-pill-dark btn-lg">Try Draft Free</a>
+    </section>
+  </main>
+
+  <footer class="landing-footer">
+    <div class="footer-top">
+      <h2>Draft</h2>
+      <div class="footer-links">
+        <a href="#home">Home</a>
+        <a href="#features">Features</a>
+        <a href="#about">About</a>
+        <a href="{{ url_for('auth.login_page') }}">Log In</a>
+      </div>
+    </div>
+    <div class="footer-bottom">
+      <span>&copy; {{ current_year }} Draft. All rights reserved.</span>
+    </div>
+  </footer>
+
+  <script>
+    if (window.lucide) { lucide.createIcons(); }
+  </script>
+</body>
+</html>

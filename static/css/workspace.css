@@ -1,0 +1,177 @@
+/* Granola-inspired theme for the authenticated workspace only, switchable
+   between dark (default) and light via the Appearance setting.
+   Loaded after main.css on index.html — it re-themes every dashboard rule
+   that already reads main.css's custom properties, then patches the small
+   number of hardcoded (non-token) colors main.css uses for surfaces/hover/
+   focus states. auth.html and landing.html never load this file, so they
+   stay on the light theme untouched regardless of this setting.
+
+   <html data-theme="dark|light"> is set by an inline script in index.html
+   (before first paint, to avoid a flash) and kept in sync by applyTheme()
+   in app.js. Everything below defaults to dark; the light block only needs
+   to override what's actually different. */
+
+:root, :root[data-theme="dark"] {
+  --canvas: #1E1E1C;
+  --surface: #262523;
+  --surface-subtle: #2C2B28;
+  --surface-hover: #34322E;
+  --line: rgba(255, 255, 255, .09);
+  --ink: #F0EEE8;
+  --ink-soft: #B4B2AA;
+  --ink-faint: #7A786F;
+  --green: #A8B36B;
+  --green-soft: rgba(168, 179, 107, .16);
+  --red: #E08585;
+  --red-soft: rgba(224, 133, 133, .14);
+  --shadow-soft: 0 20px 50px rgba(0, 0, 0, .35);
+}
+
+:root[data-theme="light"] {
+  --canvas: #F9F8F6;
+  --surface: #ffffff;
+  --surface-subtle: #F2F0EB;
+  --surface-hover: #ECEAE3;
+  --line: #E8E6E0;
+  --ink: #171715;
+  --ink-soft: #5C5A55;
+  --ink-faint: #93918A;
+  --green: #171715;
+  --green-soft: #ECEAE3;
+  --red: #B54545;
+  --red-soft: #FBEAEA;
+  --shadow-soft: 0 20px 50px rgba(23, 23, 21, .06);
+}
+
+body { font-size: 14px; }
+
+/* Serif-italic display heading, echoing the "Coming up" treatment in the
+   reference screenshots, set apart from the sans-serif UI chrome. Kept the
+   same in both themes — it's a typographic choice, not a color one. */
+.page-title, .home-heading h2, .search-heading h2, .section-title h2, .settings-tab-panel h2 {
+  font-family: "Lora", Georgia, serif;
+  font-style: italic;
+  font-weight: 600;
+}
+.page-title { font-size: clamp(32px, 4.4vw, 48px); letter-spacing: -.02em; }
+.eyebrow { font-size: 10px; }
+.page-copy { font-size: 13px; }
+.transcript-header h2 { font-size: 16px; }
+
+/* App viewport: header + resizable shell + footer, still a fixed single
+   viewport (no page scroll) rather than a scrolling marketing layout. */
+.app-viewport { display: flex; flex-direction: column; height: 100vh; }
+/* grid-template-rows: minmax(0, 1fr) forces the shell's single implicit row
+   to exactly match the available height instead of auto-growing to fit its
+   tallest child (the sidebar, once it has many folders) — without this, the
+   sidebar's content pushes the whole grid (and page) taller than the
+   viewport instead of scrolling internally. */
+.app-shell { flex: 1 1 auto; min-height: 0; grid-template-rows: minmax(0, 1fr); }
+.sidebar { height: 100%; background: var(--surface); }
+/* Grid items default to min-height:auto, which lets tall content blow past
+   the row instead of scrolling (a classic grid gotcha) — main.css's
+   .home-history-list relies on page-level scroll for overflow (it sets
+   max-height:none), so give the content pane its own scroll here instead,
+   keeping the header/sidebar/footer chrome fixed like the reference app. */
+.main-content { min-height: 0; overflow-y: auto; }
+
+.app-header { flex: 0 0 auto; display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 12px 22px; border-bottom: 1px solid var(--line); background: var(--surface); }
+.app-header-brand { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.app-header-logo { height: 48px; width: auto; object-fit: contain; }
+.app-header-logo-light { display: none; }
+:root[data-theme="light"] .app-header-logo-dark { display: none; }
+:root[data-theme="light"] .app-header-logo-light { display: block; }
+.app-header-workspace { overflow: hidden; color: var(--ink-soft); font-size: 13px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+.app-header-new-btn { min-height: 34px; padding: 8px 16px; font-size: 12.5px; }
+
+.app-footer { flex: 0 0 auto; display: flex; align-items: center; justify-content: center; padding: 9px 22px; border-top: 1px solid var(--line); background: var(--surface); color: var(--ink-faint); font-size: 11.5px; }
+
+/* Inverse buttons: main.css hardcodes `color:#fff` on a var(--ink) background.
+   Since --ink and --canvas both flip together per theme, background:var(--ink)
+   + color:var(--canvas) stays correctly high-contrast in either theme (light
+   pill/dark text in dark mode, dark pill/light text in light mode) — no
+   theme-gating needed for this one. */
+.btn-primary, .button, .sidebar-button { color: var(--canvas); }
+
+.profile-card { background: var(--surface-subtle); border-radius: var(--radius-md); }
+
+/* Appearance toggle in Settings */
+.theme-toggle { display: flex; gap: 12px; }
+.theme-option { display: flex; flex-direction: column; gap: 8px; width: 140px; padding: 6px; border: 2px solid transparent; border-radius: var(--radius-md); background: var(--surface-subtle); color: var(--ink-soft); font-size: 12.5px; font-weight: 650; transition: background .16s ease, color .16s ease, border-color .16s ease; }
+.theme-option:hover { color: var(--ink); }
+.theme-option.active { border-color: var(--ink); color: var(--ink); background: var(--surface); box-shadow: var(--shadow-soft); }
+.theme-option-preview { width: 100%; aspect-ratio: 1 / 0.96; object-fit: cover; border-radius: calc(var(--radius-md) - 4px); border: 1px solid var(--line); }
+.theme-option-label { display: inline-flex; align-items: center; justify-content: center; gap: 6px; padding: 2px 0 4px; }
+.theme-option-label i { width: 15px; height: 15px; }
+
+/* Success banner for the Email Address update flow in Settings */
+.settings-banner { margin: 0 0 12px; padding: 10px 12px; border-radius: var(--radius-sm); background: #E9F5EC; color: #2E7D46; font-size: 12.5px; line-height: 1.5; }
+:root[data-theme="dark"] .settings-banner { background: rgba(88, 179, 118, .14); color: #7FCB98; }
+
+/* Shown instead of the editable input for Google SSO accounts — a plain
+   inline readout rather than a boxed field, since it isn't interactive. */
+.google-account-row { display: flex; align-items: center; gap: 10px; }
+.google-account-row img { width: 20px; height: 20px; flex-shrink: 0; }
+.google-account-text { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.google-account-email { color: var(--ink); font-size: 14px; font-weight: 650; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.google-account-caption { color: var(--ink-soft); font-size: 12px; }
+
+/* Compact heading row (e.g. "Email Address" + an "Unverified" status pill) */
+.settings-card-heading { display: flex; align-items: center; gap: 8px; }
+.settings-card-heading h3 { margin: 0; }
+
+.status-pill { padding: 2px 8px; border-radius: 99px; font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .03em; }
+.status-pill--warning { background: #FFF6E5; color: #8A5A00; }
+:root[data-theme="dark"] .status-pill--warning { background: rgba(217, 164, 65, .18); color: #E0B75C; }
+
+/* Row of a settings card's action buttons (e.g. Update Email + the inline
+   Resend verification email prompt that only shows up when needed) */
+.settings-card-actions { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+
+/* A settings card condensed to one line: label/copy on the left, the single
+   action on the right — used where a full card would be excessive padding
+   for a card that only ever does one thing (e.g. Reset Password). */
+.settings-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.settings-row h3 { margin: 0 0 2px; }
+.settings-row p { margin: 0; }
+
+/* Danger Zone (Delete Account) */
+.settings-card--danger { border-color: var(--red); background: var(--red-soft); }
+.settings-card--danger h3 { color: var(--red); }
+:root[data-theme="dark"] .settings-card--danger { background: rgba(224, 133, 133, .08); border-color: rgba(224, 133, 133, .4); }
+
+.btn-danger { display: inline-flex; align-items: center; justify-content: center; gap: 8px; min-height: 39px; padding: 9px 16px; border: none; border-radius: var(--radius-pill); background: var(--red); color: #fff; font-size: 13px; font-weight: 680; transition: background .16s ease, transform .16s ease, opacity .16s ease; }
+.btn-danger:hover:not(:disabled) { background: #9C3A3A; transform: translateY(-1px); }
+.btn-danger:disabled { opacity: .45; cursor: not-allowed; transform: none; }
+.btn-danger i { width: 15px; height: 15px; }
+
+/* Dark-only literals: main.css already has the correct light-mode value for
+   each of these (unscoped, so it applies whenever this block doesn't). */
+:root[data-theme="dark"] button:focus-visible,
+:root[data-theme="dark"] input:focus-visible,
+:root[data-theme="dark"] textarea:focus-visible,
+:root[data-theme="dark"] [tabindex]:focus-visible { outline: 3px solid rgba(168, 179, 107, .35); }
+
+:root[data-theme="dark"] .btn-primary:hover,
+:root[data-theme="dark"] .button:hover,
+:root[data-theme="dark"] .sidebar-button:hover { background: #FFFFFF; }
+
+:root[data-theme="dark"] .home-history-list .history-item { background: var(--surface-subtle); }
+:root[data-theme="dark"] .home-history-list .history-item:hover,
+:root[data-theme="dark"] .home-history-list .history-item.active { border-color: rgba(255, 255, 255, .16); background: var(--surface-hover); }
+:root[data-theme="dark"] .toggle-block { background: var(--surface-subtle); }
+:root[data-theme="dark"] .search-box:focus-within { border-color: rgba(255, 255, 255, .18); background: var(--surface-hover); }
+:root[data-theme="dark"] textarea.transcription-textarea:hover { background: var(--surface-hover); }
+:root[data-theme="dark"] textarea.transcription-textarea:focus { border-color: rgba(255, 255, 255, .18); background: var(--surface-hover); box-shadow: 0 0 0 4px var(--green-soft); }
+:root[data-theme="dark"] .control-dock { background: rgba(38, 37, 35, .92); }
+:root[data-theme="dark"] .wave-bar { background: #5C5A54; }
+:root[data-theme="dark"] .loading-panel,
+:root[data-theme="dark"] .modal-panel { background: var(--surface); }
+:root[data-theme="dark"] .loading-overlay,
+:root[data-theme="dark"] .modal { background: rgba(0, 0, 0, .55); }
+:root[data-theme="dark"] .error-banner { border-color: rgba(224, 133, 133, .35); }
+
+@media (max-width: 800px) {
+  .app-viewport { height: auto; min-height: 100vh; }
+  .app-header { padding: 12px 16px; }
+}

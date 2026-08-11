@@ -4,34 +4,37 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Draft • AI Meeting Summarizer</title>
-  <link rel="stylesheet" href="/static/css/main.css?v=3" />
+  <script>
+    // Applied before any CSS paints, so switching themes doesn't flash the
+    // previous theme on load. Kept in sync with applyTheme() in app.js.
+    (function () {
+      var saved;
+      try { saved = window.localStorage.getItem("draft-theme"); } catch (e) {}
+      document.documentElement.setAttribute("data-theme", saved === "light" ? "light" : "dark");
+    })();
+  </script>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Lora:ital,wght@1,500;1,600&display=swap" />
+  <link rel="stylesheet" href="/static/css/main.css?v=4" />
+  <link rel="stylesheet" href="/static/css/workspace.css?v=2" />
   <script src="https://unpkg.com/lucide@latest"></script>
 </head>
 <body>
 
-  <!-- App Shell (Main Workspace) -->
-  <div class="app-shell" id="app-shell">
-    {% include "sidebar.html" %}
-    <div class="sidebar-resizer" id="sidebar-resizer" aria-hidden="true"></div>
- 
-      <main class="main-content">
-        <header class="topbar">
-          <div class="topbar-copy">
-            <p class="eyebrow">Your meeting notes, organised.</p>
-            <h1 class="page-title">
-              {% if user_name %}
-                Howdy, {{ user_name }}! 👋
-              {% else %}
-                Howdy! 👋
-              {% endif %}
-            </h1>
-            <p class="page-copy">Capture a conversation, find an earlier session, or pick up where you left off.</p>
-          </div>
-        </header>
+  <div class="app-viewport">
+    {% include "header.html" %}
 
+    <!-- App Shell (Main Workspace) -->
+    <div class="app-shell" id="app-shell">
+      {% include "sidebar.html" %}
+      <div class="sidebar-resizer" id="sidebar-resizer" aria-hidden="true"></div>
+
+      <main class="main-content">
       {% include "home.html" %}
       {% include "note.html" %}
       {% include "search.html" %}
+      {% include "folder.html" %}
 
       <section class="panel hidden" id="results">
         <div class="error-banner" id="error-banner"></div>
@@ -80,7 +83,10 @@
         </div>
       </section>
 
-    </main>
+      </main>
+    </div>
+
+    {% include "footer.html" %}
   </div>
 
   <div class="loading-overlay hidden" id="loading">
@@ -91,8 +97,11 @@
   </div>
 
   {% include "settings.html" %}
+  {% include "create-folder-modal.html" %}
+  {% include "delete-account-modal.html" %}
 
-  <script src="/static/app.js?v=3" defer></script>
+  <script src="/static/app.js?v=9" defer></script>
+  <script type="module" src="/static/settings.js?v=4"></script>
   <script>lucide.createIcons();</script>
 </body>
 </html>

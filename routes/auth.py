@@ -1,11 +1,18 @@
-﻿from flask import Blueprint, session, jsonify, render_template, request, redirect, url_for
+﻿import sqlite3
+
+from flask import Blueprint, session, jsonify, render_template, request, redirect, url_for
 from routes.utils import _parse_request_payload, get_current_user, login_required, _mask_api_key
 from database import (
     create_user,
     get_user_by_username,
+    get_user_by_firebase_uid,
     get_user_api_key,
     set_user_api_key,
+    get_user_summary_language,
+    set_user_summary_language,
     create_or_get_user_from_firebase,
+    update_user_email,
+    delete_user_account,
 )
 
 # Import Firebase Admin SDK auth gracefully. If it is not available, the server
@@ -155,6 +162,91 @@ def me():
     }), 200
 
 
+@auth_bp.route('/api/sync-session', methods=['POST'])
+@login_required
+def sync_session():
+    """Refresh the Flask session's cached email/name from a fresh Firebase ID
+    token. Firebase only updates its own record once the user confirms a
+    verifyBeforeUpdateEmail link, so the client re-checks after reloads/
+    re-auth and this endpoint pulls the latest claims into our session + DB.
+    """
+    payload = _parse_request_payload()
+    id_token = (payload.get('token') or payload.get('idToken') or '').strip()
+
+    if not id_token:
+        return jsonify({'message': 'ID token is required.'}), 400
+
+    if not firebase_auth:
+        return jsonify({'message': 'Firebase Admin SDK not configured on server.'}), 500
+
+    try:
+        decoded = firebase_auth.verify_id_token(id_token)
+    except Exception as e:
+        print(f'❌ SYNC-SESSION ERROR: Firebase token verification failed: {e}')
+        return jsonify({'message': f'Invalid Firebase token: {str(e)}'}), 401
+
+    uid = decoded.get('uid') or decoded.get('sub')
+    current_user = get_current_user()
+
+    # The token must belong to the same account as the active Flask session —
+    # otherwise a stale/foreign token could overwrite someone else's record.
+    token_user = get_user_by_firebase_uid(uid) if uid else None
+    if not token_user or token_user['id'] != current_user['id']:
+        return jsonify({'message': 'Token does not match the current session.'}), 403
+
+    email = decoded.get('email')
+    name = decoded.get('name')
+
+    if email and email != current_user.get('username'):
+        try:
+            update_user_email(current_user['id'], email)
+        except sqlite3.IntegrityError:
+            return jsonify({'message': 'This email address is already registered.'}), 409
+        session['user_email'] = email
+    elif email:
+        session['user_email'] = email
+
+    if name:
+        session['user_name'] = name
+
+    return jsonify({'success': True, 'email': session.get('user_email'), 'name': session.get('user_name')}), 200
+
+
+@auth_bp.route('/api/account/delete-data', methods=['POST'])
+def delete_account_data():
+    """Purges everything owned by the current user (sessions/folders/user row)
+    and clears the Flask session.
+
+    The client now deletes the Firebase Auth account FIRST and only calls this
+    afterward — so no local data is destroyed if Firebase rejects the deletion
+    (e.g. auth/requires-recent-login). That ordering means the Flask session
+    cookie is the normal way to identify the user here, but a Bearer ID token
+    is accepted as a fallback (verify_id_token checks the token's signature,
+    not whether the Firebase user still exists, so a token minted just before
+    deletion remains valid for this one-time cleanup call).
+    """
+    current_user = get_current_user()
+
+    if not current_user:
+        auth_header = request.headers.get('Authorization', '')
+        token = auth_header[7:].strip() if auth_header.lower().startswith('bearer ') else None
+        if not token or not firebase_auth:
+            return jsonify({'error': 'Authentication required'}), 401
+        try:
+            decoded = firebase_auth.verify_id_token(token)
+        except Exception as e:
+            print(f'❌ DELETE-ACCOUNT ERROR: Firebase token verification failed: {e}')
+            return jsonify({'error': 'Authentication required'}), 401
+        uid = decoded.get('uid') or decoded.get('sub')
+        current_user = get_user_by_firebase_uid(uid) if uid else None
+        if not current_user:
+            return jsonify({'error': 'Authentication required'}), 401
+
+    delete_user_account(current_user['id'])
+    session.clear()
+    return jsonify({'success': True, 'message': 'All user data purged successfully.'}), 200
+
+
 @auth_bp.route('/api/user/settings', methods=['GET'])
 @login_required
 def get_user_settings():
@@ -165,6 +257,7 @@ def get_user_settings():
     return jsonify({
         'api_key_saved': bool(api_key),
         'api_key_masked': _mask_api_key(api_key),
+        'summary_language': get_user_summary_language(current_user['id']),
     }), 200
 
 
@@ -173,12 +266,29 @@ def get_user_settings():
 def update_user_settings():
     current_user = get_current_user()
     payload = _parse_request_payload()
-    api_key = (payload.get('gemini_api_key') or '').strip()
-    if not api_key:
-        return jsonify({'error': 'Gemini API key is required.'}), 400
-    # Store the API key only for the currently authenticated user.
-    set_user_api_key(current_user['id'], api_key)
-    return jsonify({'api_key_saved': True, 'api_key_masked': _mask_api_key(api_key)}), 200
+
+    # Each settings field is independently optional so the API key form and
+    # the Summary language picker can each save without touching the other.
+    if 'gemini_api_key' not in payload and 'summary_language' not in payload:
+        return jsonify({'error': 'No settings provided.'}), 400
+
+    response = {}
+
+    if 'gemini_api_key' in payload:
+        api_key = (payload.get('gemini_api_key') or '').strip()
+        if not api_key:
+            return jsonify({'error': 'Gemini API key is required.'}), 400
+        # Store the API key only for the currently authenticated user.
+        set_user_api_key(current_user['id'], api_key)
+        response['api_key_saved'] = True
+        response['api_key_masked'] = _mask_api_key(api_key)
+
+    if 'summary_language' in payload:
+        summary_language = (payload.get('summary_language') or '').strip() or None
+        set_user_summary_language(current_user['id'], summary_language)
+        response['summary_language'] = summary_language
+
+    return jsonify(response), 200
 
 
 @auth_bp.route('/forgot-password', methods=['POST'])

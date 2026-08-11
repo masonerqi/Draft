@@ -1,11 +1,16 @@
+import mimetypes
+import os
+import tempfile
+
 from flask import Blueprint, request, jsonify, current_app
 from routes.utils import get_current_user, login_required
-from gemini_client import summarise_transcript, summarise_audio
+from gemini_client import summarise_transcript, summarise_media, is_invalid_api_key_error
 from database import (
     save_session,
     get_all_sessions,
     get_session_by_id,
     delete_session,
+    get_user_summary_language,
 )
 
 summaries_bp = Blueprint("summaries_bp", __name__)
@@ -24,35 +29,64 @@ def summarise():
     if not user_api_key:
         return jsonify({"error": "No Gemini API key configured. Save your personal Google AI Studio key in Settings."}), 400
 
+    # The recorder's picker (templates/note.html) only controls live speech
+    # recognition now — what language the summary is written in is the
+    # user's persistent Settings > Preferences choice instead, so every note
+    # (regardless of what was selected when recording) follows the same
+    # saved preference. None means "match the transcript's language".
+    summary_language = get_user_summary_language(current_user["id"])
+
     # Accept either a transcript text or an audio file
     if "transcript" in request.form and request.form["transcript"].strip():
         transcript = request.form["transcript"].strip()
-        result = summarise_transcript(transcript, user_api_key=user_api_key)
+        try:
+            result = summarise_transcript(transcript, user_api_key=user_api_key, language=summary_language)
+        except Exception as e:
+            if is_invalid_api_key_error(e):
+                return jsonify({"error": "Your Gemini API key appears to be invalid or expired. Please update it in Settings."}), 401
+            return jsonify({"error": f"Gemini processing failed: {str(e)}"}), 500
         filename = "paste"
         input_type = "transcript"
 
-    elif "audio" in request.files:
-        audio_file = request.files["audio"]
-        audio_bytes = audio_file.read()
+    elif "media" in request.files:
+        media_file = request.files["media"]
+        filename = media_file.filename or "recording"
 
-        if len(audio_bytes) == 0:
-            return jsonify({"error": "Empty audio file received"}), 400
+        # Werkzeug's Content-Type sniffing is frequently missing or generic
+        # (application/octet-stream) for .m4a/.webm uploads on Windows —
+        # fall back to guessing from the filename extension.
+        mime_type = media_file.mimetype
+        if not mime_type or mime_type == "application/octet-stream":
+            guessed, _ = mimetypes.guess_type(filename)
+            mime_type = guessed or mime_type or "application/octet-stream"
 
-        mime_type = audio_file.mimetype or "audio/webm"
-
+        suffix = os.path.splitext(filename)[1]
+        tmp_path = None
         try:
-            result = summarise_audio(audio_bytes, mime_type=mime_type, user_api_key=user_api_key)
-        except Exception as e:
-            return jsonify({"error": f"Gemini audio processing failed: {str(e)}"}), 500
+            with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+                media_file.save(tmp)
+                tmp_path = tmp.name
 
-        # Gemini returns the transcript inside the result for audio input
+            if os.path.getsize(tmp_path) == 0:
+                return jsonify({"error": "Empty file received"}), 400
+
+            try:
+                result = summarise_media(tmp_path, mime_type=mime_type, user_api_key=user_api_key, language=summary_language)
+            except Exception as e:
+                if is_invalid_api_key_error(e):
+                    return jsonify({"error": "Your Gemini API key appears to be invalid or expired. Please update it in Settings."}), 401
+                return jsonify({"error": f"Gemini media processing failed: {str(e)}"}), 500
+        finally:
+            if tmp_path and os.path.exists(tmp_path):
+                os.remove(tmp_path)
+
+        # Gemini returns the transcript inside the result for media input
         transcript = result.get("transcript")
         current_app.logger.debug("DEBUG RESULT: %s", result)
-        filename = audio_file.filename or "recording"
-        input_type = "audio"
+        input_type = "media"
 
     else:
-        return jsonify({"error": "No transcript or audio provided"}), 400
+        return jsonify({"error": "No transcript or media file provided"}), 400
 
     session_id = save_session(
         input_type=input_type,

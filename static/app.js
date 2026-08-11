@@ -8,12 +8,18 @@ const state = {
   currentUser: null,
   timerInterval: null,
   totalSeconds: 0,
+  mediaStream: null,
   sidebarWidth: 280,
   sessions: [],
   currentView: "home",
   isResizingSidebar: false,
   sidebarResizeStartX: 0,
   sidebarResizeStartWidth: 280,
+  folders: [],
+  activeFolderId: null,
+  selectMode: false,
+  selectedSessionIds: new Set(),
+  selectedFolderIcon: "folder",
 };
 
 const elements = {
@@ -24,6 +30,7 @@ const elements = {
   profileInitials: document.getElementById("profile-initials"),
   historyList: document.getElementById("history-list"),
   homeView: document.getElementById("home-view"),
+  homeTopbar: document.getElementById("home-topbar"),
   searchView: document.getElementById("search-view"),
   searchResultsList: document.getElementById("search-results-list"),
   searchInput: document.getElementById("session-search-input"),
@@ -47,14 +54,153 @@ const elements = {
   transcriptSection: document.getElementById("transcript-section"),
   transcriptText: document.getElementById("transcript-text"),
   transcriptInput: document.getElementById("transcript-input"),
+  languageSelect: document.getElementById("languageSelect"),
+  importFileButton: document.getElementById("import-file-btn"),
+  mediaFileInput: document.getElementById("media-file-input"),
   exportButton: document.getElementById("exportTextBtn"),
   newSessionButton: document.getElementById("new-session-btn"),
+  folderList: document.getElementById("folder-list"),
+  createFolderButton: document.getElementById("create-folder-btn"),
+  folderView: document.getElementById("folder-view"),
+  folderViewTitle: document.getElementById("folder-view-title"),
+  folderNotesList: document.getElementById("folder-notes-list"),
+  deleteFolderButton: document.getElementById("delete-folder-btn"),
+  createFolderModal: document.getElementById("create-folder-modal"),
+  createFolderCloseButton: document.getElementById("create-folder-close-btn"),
+  folderNameInput: document.getElementById("folder-name-input"),
+  folderIconPicker: document.getElementById("folder-icon-picker"),
+  createFolderError: document.getElementById("create-folder-error"),
+  createFolderSubmitButton: document.getElementById("create-folder-submit-btn"),
+  selectNotesButton: document.getElementById("select-notes-btn"),
+  bulkActionsBar: document.getElementById("bulk-actions-bar"),
+  bulkSelectedCount: document.getElementById("bulk-selected-count"),
+  bulkFolderWrap: document.getElementById("bulk-folder-wrap"),
+  bulkFolderTrigger: document.getElementById("bulk-folder-trigger"),
+  bulkFolderMenu: document.getElementById("bulk-folder-menu"),
+  bulkCancelButton: document.getElementById("bulk-cancel-btn"),
+  bulkDeleteButton: document.getElementById("bulk-delete-btn"),
+  summaryLanguageWrap: document.getElementById("summary-language-wrap"),
+  summaryLanguageTrigger: document.getElementById("summary-language-trigger"),
+  summaryLanguageMenu: document.getElementById("summary-language-menu"),
+  summaryLanguageLabel: document.getElementById("summary-language-label"),
 };
 
 function renderLucideIcons() {
   if (window.lucide && typeof lucide.createIcons === "function") {
     lucide.createIcons();
   }
+}
+
+// Curated icon choices for the "Create folder" icon grid — all Lucide names,
+// matching every other icon already used across the app.
+const FOLDER_ICONS = [
+  "folder", "book-open", "graduation-cap", "briefcase", "users", "star",
+  "heart", "flag", "code", "coffee", "lightbulb", "target", "calendar",
+  "music", "camera", "palette", "rocket", "globe",
+];
+
+// Settings > Preferences > Summary language. Mirrors gemini_client.py's
+// LANGUAGE_NAMES exactly (same BCP-47 codes) — "" means "match transcript
+// language" (Gemini's default when no language is specified).
+const SUMMARY_LANGUAGE_OPTIONS = [
+  { value: "", label: "Match transcript language" },
+  { value: "en-US", label: "English (US)" },
+  { value: "en-GB", label: "English (UK)" },
+  { value: "ms-MY", label: "Bahasa Melayu" },
+  { value: "zh-CN", label: "Mandarin (Simplified)" },
+  { value: "ja-JP", label: "Japanese" },
+  { value: "ko-KR", label: "Korean" },
+  { value: "es-ES", label: "Spanish" },
+  { value: "fr-FR", label: "French" },
+  { value: "de-DE", label: "German" },
+  { value: "hi-IN", label: "Hindi" },
+  { value: "ta-IN", label: "Tamil" },
+];
+
+// Custom dropdown for #languageSelect: the native <select> stays the single
+// source of truth (its data-flag attributes drive both the trigger button
+// and the menu below), but is visually hidden — native <select> popups fall
+// back to two-letter codes instead of pictorial flags on some platforms
+// (e.g. Windows), while a browser-rendered custom menu doesn't.
+function syncLanguageTrigger() {
+  const select = elements.languageSelect;
+  if (!select) return;
+  const selected = select.options[select.selectedIndex];
+  const flag = (selected && selected.dataset.flag) || "🌐";
+  const label = selected ? selected.textContent.trim() : "";
+  const flagEl = document.getElementById("language-select-flag");
+  const labelEl = document.getElementById("language-select-label");
+  if (flagEl) flagEl.textContent = flag;
+  if (labelEl) labelEl.textContent = label;
+  document.querySelectorAll(".language-select-option").forEach((el) => {
+    const isActive = el.dataset.value === select.value;
+    el.classList.toggle("active", isActive);
+    el.setAttribute("aria-selected", String(isActive));
+  });
+}
+
+function toggleLanguageMenu(forceOpen) {
+  const menu = document.getElementById("language-select-menu");
+  const trigger = document.getElementById("language-select-trigger");
+  if (!menu || !trigger) return;
+  const shouldOpen = typeof forceOpen === "boolean" ? forceOpen : menu.classList.contains("hidden");
+  menu.classList.toggle("hidden", !shouldOpen);
+  trigger.setAttribute("aria-expanded", String(shouldOpen));
+}
+
+function closeLanguageMenu() {
+  toggleLanguageMenu(false);
+}
+
+function initializeLanguagePicker() {
+  const select = elements.languageSelect;
+  const trigger = document.getElementById("language-select-trigger");
+  const menu = document.getElementById("language-select-menu");
+  const wrap = document.getElementById("language-select-wrap");
+  if (!select || !trigger || !menu || !wrap) return;
+
+  Array.from(select.options).forEach((option) => {
+    const item = document.createElement("li");
+    item.className = "language-select-option";
+    item.setAttribute("role", "option");
+    item.dataset.value = option.value;
+    item.innerHTML = `<span class="language-select-flag">${option.dataset.flag || "🌐"}</span><span>${option.textContent.trim()}</span>`;
+    item.addEventListener("click", () => {
+      select.value = option.value;
+      syncLanguageTrigger();
+      closeLanguageMenu();
+    });
+    menu.appendChild(item);
+  });
+
+  trigger.addEventListener("click", (event) => {
+    event.stopPropagation();
+    toggleLanguageMenu();
+  });
+  document.addEventListener("click", (event) => {
+    if (!wrap.contains(event.target)) closeLanguageMenu();
+  });
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") closeLanguageMenu();
+  });
+
+  syncLanguageTrigger();
+}
+
+// Mirrors the display-name fallback logic already used server-side in
+// sidebar.html/settings.html: prefer the stored name, fall back to a
+// title-cased email prefix, then "Guest".
+function getFormattedDisplayName(user) {
+  const name = user && user.name;
+  const email = user && (user.email || user.username);
+  if (name && name !== email) return name;
+  if (email) {
+    return email
+      .split("@")[0]
+      .replace(/\./g, " ")
+      .replace(/\b\w/g, (c) => c.toUpperCase());
+  }
+  return "Guest";
 }
 
 function formatInitials(name) {
@@ -79,7 +225,7 @@ async function fetchCurrentUser() {
   }
 }
 
-function showAppView(user) {
+async function showAppView(user) {
   state.currentUser = user;
   
   const displayName = getFormattedDisplayName(user);
@@ -101,9 +247,15 @@ function showAppView(user) {
   if (settingsEmail) settingsEmail.textContent = email;
   if (settingsInitials) settingsInitials.textContent = formatInitials(displayName);
 
-  // Load user-specific data
-  loadHistory();
-  ensureApiKeySaved();
+  // Load user-specific data sequentially rather than firing every fetch at
+  // once — this environment's SQLite setup (a fresh connection per query, no
+  // pooling/WAL) is prone to "database is locked" errors under concurrent
+  // requests, which was intermittently swallowing the initial /folders call
+  // on page load while a later, solo request (e.g. creating a folder)
+  // succeeded fine.
+  await loadHistory();
+  await loadFolders();
+  await ensureApiKeySaved();
   showHome();
 }
 
@@ -137,6 +289,28 @@ function stopTimer() {
   clearInterval(state.timerInterval);
 }
 
+// Fully clears the recording clock: stops the background interval, zeroes
+// the counter, and resets the on-screen display. Used whenever a session is
+// discarded/reset, as opposed to stopTimer() which just freezes the display
+// at its current value when a recording ends naturally.
+function resetTimer() {
+  clearInterval(state.timerInterval);
+  state.timerInterval = null;
+  state.totalSeconds = 0;
+  const timerDisplay = document.getElementById("dock-timer-display");
+  if (timerDisplay) timerDisplay.textContent = "0:00";
+}
+
+// Stops any mic tracks captured for the permission/record session so the
+// browser's recording indicator turns off and the device is freed for the
+// next session.
+function releaseMicrophone() {
+  if (state.mediaStream) {
+    state.mediaStream.getTracks().forEach((track) => track.stop());
+    state.mediaStream = null;
+  }
+}
+
 function updateRecordingStatusUI(recording, text) {
   const statusTextIndicator = document.getElementById("record-status-text");
   const indicatorComponent = document.getElementById("record-status-indicator");
@@ -149,6 +323,15 @@ function updateRecordingStatusUI(recording, text) {
   } else {
     indicatorComponent.classList.remove("active");
     dockButton.classList.remove("recording");
+  }
+  // The language is only read when a new SpeechRecognition instance is
+  // created, so changing it mid-session wouldn't take effect until the next
+  // recording — disable it while recording to avoid that confusion.
+  if (elements.languageSelect) elements.languageSelect.disabled = recording;
+  const languageTrigger = document.getElementById("language-select-trigger");
+  if (languageTrigger) {
+    languageTrigger.disabled = recording;
+    if (recording) closeLanguageMenu();
   }
 }
 
@@ -169,11 +352,19 @@ async function toggleRecord() {
 
   if (!state.isRecording) {
     try {
-      await navigator.mediaDevices.getUserMedia({ audio: true });
+      state.mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true });
       state.recognition = new SpeechRecognition();
       state.recognition.continuous = true;
       state.recognition.interimResults = true;
-      state.recognition.lang = "en-US";
+      // Bind the speech language from the recorder's language picker before
+      // starting recognition. Web Speech API has no real "detect any
+      // language automatically" mode — leaving .lang unset (the "Automatically
+      // Detected" option's empty value) just falls back to the browser's own
+      // default locale, it won't identify Mandarin vs. English mid-speech.
+      const selectedLang = elements.languageSelect ? elements.languageSelect.value : "";
+      if (selectedLang) {
+        state.recognition.lang = selectedLang;
+      }
 
       const textInput = elements.transcriptInput;
       state.liveTranscript = textInput.value ? textInput.value + "\n" : "";
@@ -223,6 +414,7 @@ async function toggleRecord() {
         document.getElementById("live-badge").classList.add("hidden");
         setTimeout(() => updateRecordingStatusUI(false, "Captured"), 1500);
         stopTimer();
+        releaseMicrophone();
       };
 
       state.recognition.start();
@@ -251,10 +443,39 @@ async function submitTranscript() {
     alert("Please compile or capture a live transcript sequence first.");
     return;
   }
+  // What language the summary is written in is Settings > Preferences'
+  // "Summary language" choice (server-side, per-user) — not sent per
+  // request. The picker here only ever controlled live speech recognition.
   const formData = new FormData();
   formData.append("transcript", text);
   formData.append("source_hint", state.lastInputWasAudio ? "voice" : "manual");
   await submitToAPI(formData, "Sending content to Gemini Engine...");
+}
+
+// Matches app.py's MAX_CONTENT_LENGTH — checked client-side too so an
+// oversized file fails fast instead of uploading first and failing later.
+const MAX_UPLOAD_BYTES = 300 * 1024 * 1024;
+
+async function handleFileUpload(event) {
+  const file = event.target.files && event.target.files[0];
+  // Reset immediately (not just on success) so re-selecting the same
+  // filename later — e.g. right after fixing an invalid API key — still
+  // fires a fresh "change" event.
+  event.target.value = "";
+  if (!file) return;
+
+  if (file.size > MAX_UPLOAD_BYTES) {
+    alert(`That file is too large (max ${MAX_UPLOAD_BYTES / (1024 * 1024)}MB). Try a shorter recording or a more compressed format.`);
+    return;
+  }
+
+  stopRecordingIfActive();
+  state.activeSessionId = null;
+  state.lastInputWasAudio = true;
+
+  const formData = new FormData();
+  formData.append("media", file);
+  await submitToAPI(formData, "Uploading and analyzing your file...");
 }
 
 async function submitToAPI(formData, msg) {
@@ -269,8 +490,12 @@ async function submitToAPI(formData, msg) {
     const data = await res.json();
     if (!res.ok) {
       const errorMessage = data.error || "Unknown server fault";
-      if (errorMessage.toLowerCase().includes("no gemini api key configured") || errorMessage.toLowerCase().includes("gemini api key is required")) {
-        openSettings();
+      // Covers "No Gemini API key configured...", "Gemini API key is
+      // required...", and "...API key appears to be invalid or expired..."
+      // — any backend error about the key sends the user straight to where
+      // they'd fix it, instead of a generic alert.
+      if (errorMessage.toLowerCase().includes("api key")) {
+        openSettings("api-key");
         elements.settingsError.textContent = errorMessage;
         hideLoading();
         return;
@@ -296,7 +521,8 @@ function showResults(data) {
 
   const meta = [];
   if (data.input_type) {
-    meta.push(data.input_type === "audio" ? "Voice Capture" : "Pasted Text");
+    const inputTypeLabels = { audio: "Voice Capture", media: "Imported File" };
+    meta.push(inputTypeLabels[data.input_type] || "Pasted Text");
   }
   if (data.created_at) {
     meta.push(new Date(data.created_at).toLocaleString());
@@ -337,9 +563,12 @@ function showResults(data) {
 
   elements.inputView.classList.add("hidden");
   elements.homeView.classList.add("hidden");
+  elements.homeTopbar.classList.add("hidden");
   elements.searchView.classList.add("hidden");
+  elements.folderView.classList.add("hidden");
   elements.resultsView.classList.remove("hidden");
   document.getElementById("floating-dock-row").style.display = "none";
+  clearFolderHighlight();
   highlightActiveHistoryItem();
 }
 
@@ -352,6 +581,7 @@ function showError(message) {
   elements.errorBanner.style.display = "block";
   elements.inputView.classList.add("hidden");
   elements.homeView.classList.add("hidden");
+  elements.homeTopbar.classList.add("hidden");
   elements.searchView.classList.add("hidden");
   elements.loadingOverlay.classList.add("hidden");
   elements.resultsView.classList.remove("hidden");
@@ -384,18 +614,33 @@ function renderSessionList(container, sessions, emptyMessage) {
     container.innerHTML = `<li class="history-empty">${emptyMessage}</li>`;
     return;
   }
+  // Bulk multi-select is only ever active on the Search results list — Home's
+  // mini-list and a folder's note list always render in normal (view/delete) mode.
+  const selectable = state.selectMode && container === elements.searchResultsList;
   container.innerHTML = sessions
-      .map((session) => `
-        <li class="history-item" data-id="${session.id}">
-          <div class="history-item-body" onclick="loadSession(${session.id})">
+      .map((session) => {
+        const titleBlock = `
             <div class="history-title">${escapeHtml(session.summary || "Untitled summary").substring(0, 55)}${(session.summary || "").length > 55 ? "..." : ""}</div>
             <div class="history-meta">${new Date(session.created_at).toLocaleDateString()}</div>
-          </div>
+          `;
+        if (selectable) {
+          const isChecked = state.selectedSessionIds.has(session.id);
+          return `
+        <li class="history-item selectable${isChecked ? " active" : ""}" data-id="${session.id}" onclick="toggleSessionSelected(${session.id})">
+          <input type="checkbox" class="history-item-checkbox" ${isChecked ? "checked" : ""} tabindex="-1" />
+          <div class="history-item-body">${titleBlock}</div>
+        </li>
+      `;
+        }
+        return `
+        <li class="history-item" data-id="${session.id}">
+          <div class="history-item-body" onclick="loadSession(${session.id})">${titleBlock}</div>
           <button type="button" aria-label="Delete session" onclick="event.stopPropagation(); deleteSession(${session.id})">
             <i data-lucide="trash-2"></i>
           </button>
         </li>
-      `)
+      `;
+      })
       .join("");
   renderLucideIcons();
   highlightActiveHistoryItem();
@@ -413,6 +658,251 @@ function highlightActiveHistoryItem() {
   document.querySelectorAll(".history-item").forEach((el) => {
     el.classList.toggle("active", String(state.activeSessionId) === el.dataset.id);
   });
+}
+
+// ---- Folders ----
+
+async function loadFolders() {
+  try {
+    const res = await fetch("/folders", { credentials: "same-origin" });
+    if (res.status === 401) {
+      logout();
+      return;
+    }
+    if (!res.ok) {
+      console.warn("Folders request failed:", res.status);
+      return;
+    }
+    const data = await res.json();
+    state.folders = Array.isArray(data) ? data : [];
+    renderFolderList();
+    renderBulkFolderMenu();
+  } catch (e) {
+    console.warn("Folders unreachable.", e);
+  }
+}
+
+function renderFolderList() {
+  if (!elements.folderList) return;
+  if (!state.folders.length) {
+    elements.folderList.innerHTML = "";
+    return;
+  }
+  elements.folderList.innerHTML = state.folders
+    .map((folder) => `
+      <li>
+        <button type="button" class="nav-item folder-nav-item${state.activeFolderId === folder.id ? " active" : ""}" data-folder-id="${folder.id}" onclick="showFolder(${folder.id})">
+          <i data-lucide="${escapeHtml(folder.icon)}"></i>
+          <span>${escapeHtml(folder.name)}</span>
+          ${folder.note_count ? `<span class="badge-red folder-count">${folder.note_count}</span>` : ""}
+        </button>
+      </li>
+    `)
+    .join("");
+  renderLucideIcons();
+}
+
+window.showFolder = async function (id) {
+  exitSelectMode();
+  state.activeFolderId = id;
+  const folder = state.folders.find((f) => f.id === id);
+
+  state.currentView = "folder";
+  elements.resultsView.classList.add("hidden");
+  elements.homeView.classList.add("hidden");
+  elements.homeTopbar.classList.add("hidden");
+  elements.inputView.classList.add("hidden");
+  elements.searchView.classList.add("hidden");
+  elements.folderView.classList.remove("hidden");
+  document.getElementById("floating-dock-row").style.display = "none";
+
+  setActiveNav("");
+  document.querySelectorAll(".folder-nav-item").forEach((el) => {
+    el.classList.toggle("active", el.dataset.folderId === String(id));
+  });
+
+  if (elements.folderViewTitle) elements.folderViewTitle.textContent = folder ? folder.name : "Folder";
+
+  try {
+    const res = await fetch(`/folders/${id}/sessions`, { credentials: "same-origin" });
+    const data = await res.json();
+    renderSessionList(elements.folderNotesList, Array.isArray(data) ? data : [], "No notes in this folder yet.");
+  } catch (e) {
+    console.warn("Unable to load folder notes.", e);
+  }
+};
+
+async function deleteActiveFolder() {
+  if (!state.activeFolderId) return;
+  await fetch(`/folders/${state.activeFolderId}`, { method: "DELETE", credentials: "same-origin" });
+  state.activeFolderId = null;
+  await loadFolders();
+  showHome();
+}
+
+function renderFolderIconPicker() {
+  if (!elements.folderIconPicker) return;
+  elements.folderIconPicker.innerHTML = FOLDER_ICONS
+    .map((icon) => `
+      <button type="button" class="icon-picker-option${state.selectedFolderIcon === icon ? " active" : ""}" data-icon="${icon}" title="${icon}">
+        <i data-lucide="${icon}"></i>
+      </button>
+    `)
+    .join("");
+  renderLucideIcons();
+  elements.folderIconPicker.querySelectorAll(".icon-picker-option").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      state.selectedFolderIcon = btn.dataset.icon;
+      elements.folderIconPicker.querySelectorAll(".icon-picker-option").forEach((el) => {
+        el.classList.toggle("active", el.dataset.icon === state.selectedFolderIcon);
+      });
+    });
+  });
+}
+
+function openCreateFolderModal() {
+  if (!elements.createFolderModal) return;
+  state.selectedFolderIcon = "folder";
+  if (elements.folderNameInput) elements.folderNameInput.value = "";
+  if (elements.createFolderError) elements.createFolderError.textContent = "";
+  renderFolderIconPicker();
+  elements.createFolderModal.classList.remove("hidden");
+  if (elements.folderNameInput) elements.folderNameInput.focus();
+}
+
+function closeCreateFolderModal() {
+  if (elements.createFolderModal) elements.createFolderModal.classList.add("hidden");
+}
+
+async function submitCreateFolder() {
+  const name = (elements.folderNameInput?.value || "").trim();
+  if (elements.createFolderError) elements.createFolderError.textContent = "";
+  if (!name) {
+    if (elements.createFolderError) elements.createFolderError.textContent = "Please name your folder.";
+    return;
+  }
+  try {
+    const res = await fetch("/folders", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      credentials: "same-origin",
+      body: JSON.stringify({ name, icon: state.selectedFolderIcon }),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      if (elements.createFolderError) elements.createFolderError.textContent = data.error || "Failed to create folder.";
+      return;
+    }
+    closeCreateFolderModal();
+    await loadFolders();
+  } catch (error) {
+    if (elements.createFolderError) elements.createFolderError.textContent = error.message || "Unable to create folder.";
+  }
+}
+
+// ---- Bulk select (Search view only) ----
+
+function exitSelectMode() {
+  if (!state.selectMode) return;
+  state.selectMode = false;
+  state.selectedSessionIds.clear();
+  if (elements.bulkActionsBar) elements.bulkActionsBar.classList.add("hidden");
+  if (elements.selectNotesButton) elements.selectNotesButton.querySelector("span").textContent = "Select";
+  renderSessionList(elements.searchResultsList, state.sessions, "No matching notes found.");
+}
+
+function toggleSelectMode() {
+  state.selectMode = !state.selectMode;
+  state.selectedSessionIds.clear();
+  if (elements.bulkActionsBar) elements.bulkActionsBar.classList.toggle("hidden", !state.selectMode);
+  if (elements.selectNotesButton) elements.selectNotesButton.querySelector("span").textContent = state.selectMode ? "Cancel" : "Select";
+  updateBulkSelectedCount();
+  filterSessions(elements.searchInput.value || "");
+}
+
+window.toggleSessionSelected = function (id) {
+  if (state.selectedSessionIds.has(id)) {
+    state.selectedSessionIds.delete(id);
+  } else {
+    state.selectedSessionIds.add(id);
+  }
+  updateBulkSelectedCount();
+  filterSessions(elements.searchInput.value || "");
+};
+
+function updateBulkSelectedCount() {
+  if (elements.bulkSelectedCount) {
+    elements.bulkSelectedCount.textContent = `${state.selectedSessionIds.size} selected`;
+  }
+}
+
+function renderBulkFolderMenu() {
+  if (!elements.bulkFolderMenu) return;
+  if (!state.folders.length) {
+    elements.bulkFolderMenu.innerHTML = `<li class="dropdown-option-empty">Create a folder first</li>`;
+    return;
+  }
+  elements.bulkFolderMenu.innerHTML = state.folders
+    .map((folder) => `
+      <li class="dropdown-option" data-folder-id="${folder.id}">
+        <i data-lucide="${escapeHtml(folder.icon)}"></i>
+        <span>${escapeHtml(folder.name)}</span>
+      </li>
+    `)
+    .join("");
+  renderLucideIcons();
+  elements.bulkFolderMenu.querySelectorAll(".dropdown-option").forEach((item) => {
+    item.addEventListener("click", () => moveSelectedSessionsToFolder(Number(item.dataset.folderId)));
+  });
+}
+
+async function moveSelectedSessionsToFolder(folderId) {
+  if (!state.selectedSessionIds.size) return;
+  try {
+    await fetch("/sessions/folder", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      credentials: "same-origin",
+      body: JSON.stringify({ session_ids: Array.from(state.selectedSessionIds), folder_id: folderId }),
+    });
+  } catch (e) {
+    console.warn("Unable to move notes to folder.", e);
+  }
+  toggleBulkFolderMenu(false);
+  exitSelectMode();
+  await loadFolders();
+  await loadHistory();
+  filterSessions(elements.searchInput.value || "");
+}
+
+async function deleteSelectedSessions() {
+  const ids = Array.from(state.selectedSessionIds);
+  if (!ids.length) return;
+  if (!window.confirm(`Delete ${ids.length} note${ids.length > 1 ? "s" : ""}? This can't be undone.`)) {
+    return;
+  }
+  try {
+    await Promise.all(ids.map((id) => fetch(`/sessions/${id}`, { method: "DELETE", credentials: "same-origin" })));
+  } catch (e) {
+    console.warn("Unable to delete some notes.", e);
+  }
+  if (ids.includes(state.activeSessionId)) resetToInput();
+  exitSelectMode();
+  await loadHistory();
+  await loadFolders();
+}
+
+function toggleBulkFolderMenu(forceOpen) {
+  if (!elements.bulkFolderMenu || !elements.bulkFolderTrigger) return;
+  const shouldOpen = typeof forceOpen === "boolean" ? forceOpen : elements.bulkFolderMenu.classList.contains("hidden");
+  elements.bulkFolderMenu.classList.toggle("hidden", !shouldOpen);
+}
+
+// Called whenever another view (Home/Search/Input/Results) takes over, so a
+// stale "currently open folder" highlight can't linger in the sidebar.
+function clearFolderHighlight() {
+  state.activeFolderId = null;
+  document.querySelectorAll(".folder-nav-item").forEach((el) => el.classList.remove("active"));
 }
 
 window.loadSession = async function (id) {
@@ -434,13 +924,34 @@ window.deleteSession = async function (id) {
   await fetch(`/sessions/${id}`, { method: "DELETE", credentials: "same-origin" });
   if (state.activeSessionId === id) resetToInput();
   loadHistory();
+  loadFolders();
+  if (state.currentView === "folder" && state.activeFolderId) {
+    showFolder(state.activeFolderId);
+  }
 };
 
-async function openSettings() {
+function setSettingsTab(tab) {
+  const target = tab || "profile";
+  document.querySelectorAll(".settings-nav-item").forEach((btn) => {
+    btn.classList.toggle("active", btn.dataset.settingsTab === target);
+  });
+  document.querySelectorAll(".settings-tab-panel").forEach((panel) => {
+    panel.classList.toggle("hidden", panel.dataset.settingsPanel !== target);
+  });
+}
+
+function initializeSettingsTabs() {
+  document.querySelectorAll(".settings-nav-item").forEach((btn) => {
+    btn.addEventListener("click", () => setSettingsTab(btn.dataset.settingsTab));
+  });
+}
+
+async function openSettings(tab) {
   setActiveNav("settings-btn");
   elements.settingsError.textContent = "";
   elements.settingsStatus.textContent = "";
   elements.apiKeyInput.value = "";
+  setSettingsTab(tab);
   elements.settingsModal.classList.remove("hidden");
   await loadUserSettings();
   renderLucideIcons();
@@ -455,6 +966,8 @@ function closeSettings() {
     showHome();
   } else if (state.currentView === "search") {
     showSearch();
+  } else if (state.currentView === "folder" && state.activeFolderId) {
+    showFolder(state.activeFolderId);
   } else {
     showInput();
   }
@@ -470,6 +983,7 @@ async function loadUserSettings() {
     elements.settingsStatus.textContent = data.api_key_saved
       ? `Saved key: ${data.api_key_masked}`
       : "No API key saved yet. Paste your Google AI Studio Gemini key above.";
+    syncSummaryLanguageLabel(data.summary_language || "");
     return data;
   } catch (error) {
     elements.settingsError.textContent = error.message;
@@ -477,10 +991,61 @@ async function loadUserSettings() {
   }
 }
 
+function syncSummaryLanguageLabel(value) {
+  if (!elements.summaryLanguageLabel) return;
+  const match = SUMMARY_LANGUAGE_OPTIONS.find((opt) => opt.value === value);
+  elements.summaryLanguageLabel.textContent = match ? match.label : SUMMARY_LANGUAGE_OPTIONS[0].label;
+  elements.summaryLanguageMenu?.querySelectorAll(".dropdown-option").forEach((el) => {
+    el.classList.toggle("active", el.dataset.value === value);
+  });
+}
+
+function toggleSummaryLanguageMenu(forceOpen) {
+  if (!elements.summaryLanguageMenu) return;
+  const shouldOpen = typeof forceOpen === "boolean" ? forceOpen : elements.summaryLanguageMenu.classList.contains("hidden");
+  elements.summaryLanguageMenu.classList.toggle("hidden", !shouldOpen);
+}
+
+async function selectSummaryLanguage(value) {
+  toggleSummaryLanguageMenu(false);
+  syncSummaryLanguageLabel(value);
+  try {
+    await fetch("/api/user/settings", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      credentials: "same-origin",
+      body: JSON.stringify({ summary_language: value }),
+    });
+  } catch (e) {
+    console.warn("Unable to save summary language.", e);
+  }
+}
+
+function initializeSummaryLanguagePicker() {
+  if (!elements.summaryLanguageMenu || !elements.summaryLanguageTrigger) return;
+
+  elements.summaryLanguageMenu.innerHTML = SUMMARY_LANGUAGE_OPTIONS
+    .map((opt) => `<li class="dropdown-option" data-value="${opt.value}">${escapeHtml(opt.label)}</li>`)
+    .join("");
+  elements.summaryLanguageMenu.querySelectorAll(".dropdown-option").forEach((item) => {
+    item.addEventListener("click", () => selectSummaryLanguage(item.dataset.value));
+  });
+
+  elements.summaryLanguageTrigger.addEventListener("click", (event) => {
+    event.stopPropagation();
+    toggleSummaryLanguageMenu();
+  });
+  document.addEventListener("click", (event) => {
+    if (elements.summaryLanguageWrap && !elements.summaryLanguageWrap.contains(event.target)) {
+      toggleSummaryLanguageMenu(false);
+    }
+  });
+}
+
 async function ensureApiKeySaved() {
   const data = await loadUserSettings();
   if (data && !data.api_key_saved) {
-    openSettings();
+    openSettings("api-key");
     elements.settingsStatus.textContent = "Please paste your Gemini API key to continue.";
   }
 }
@@ -525,10 +1090,14 @@ function hideLoading() {
 function showInput() {
   state.currentView = "record";
   elements.homeView.classList.add("hidden");
+  elements.homeTopbar.classList.add("hidden");
   elements.searchView.classList.add("hidden");
+  elements.folderView.classList.add("hidden");
   elements.inputView.classList.remove("hidden");
   elements.resultsView.classList.add("hidden");
   document.getElementById("floating-dock-row").style.display = "flex";
+  clearFolderHighlight();
+  exitSelectMode();
   setActiveNav("");
 }
 
@@ -536,9 +1105,13 @@ function showHome() {
   state.currentView = "home";
   elements.resultsView.classList.add("hidden");
   elements.searchView.classList.add("hidden");
+  elements.folderView.classList.add("hidden");
   elements.inputView.classList.add("hidden");
   elements.homeView.classList.remove("hidden");
+  elements.homeTopbar.classList.remove("hidden");
   document.getElementById("floating-dock-row").style.display = "none";
+  clearFolderHighlight();
+  exitSelectMode();
   setActiveNav("nav-home-btn");
   loadHistory();
 }
@@ -547,9 +1120,13 @@ async function showSearch() {
   state.currentView = "search";
   elements.resultsView.classList.add("hidden");
   elements.homeView.classList.add("hidden");
+  elements.homeTopbar.classList.add("hidden");
   elements.inputView.classList.add("hidden");
+  elements.folderView.classList.add("hidden");
   elements.searchView.classList.remove("hidden");
   document.getElementById("floating-dock-row").style.display = "none";
+  clearFolderHighlight();
+  exitSelectMode();
   setActiveNav("nav-search-btn");
   await loadHistory();
   filterSessions(elements.searchInput.value || "");
@@ -559,29 +1136,44 @@ async function showSearch() {
 window.showSearch = showSearch;
 
 function setActiveNav(activeId) {
-  document.querySelectorAll(".nav-item").forEach((item) => item.classList.toggle("active", item.id === activeId));
+  // Folder rows share the .nav-item class for consistent styling but have no
+  // id (they're matched by data-folder-id instead) — exclude them here, or
+  // setActiveNav("") would match every folder's empty id and highlight them all.
+  document.querySelectorAll(".nav-item:not(.folder-nav-item)").forEach((item) => item.classList.toggle("active", item.id === activeId));
 }
 
 function resetToInput() {
   stopRecordingIfActive();
+  resetTimer();
+  releaseMicrophone();
   state.activeSessionId = null;
+  state.liveTranscript = "";
   hideError();
   elements.resultsView.classList.add("hidden");
   elements.homeView.classList.add("hidden");
+  elements.homeTopbar.classList.add("hidden");
   elements.searchView.classList.add("hidden");
+  elements.folderView.classList.add("hidden");
   elements.loadingOverlay.classList.add("hidden");
   elements.inputView.classList.remove("hidden");
   document.getElementById("floating-dock-row").style.display = "flex";
   elements.transcriptInput.value = "";
-  document.getElementById("dock-timer-display").textContent = "0:00";
   document.getElementById("live-badge").style.display = "none";
   state.lastInputWasAudio = false;
   state.currentView = "record";
+  clearFolderHighlight();
+  exitSelectMode();
   setActiveNav("");
   highlightActiveHistoryItem();
 }
 
 function clearInput() {
+  stopRecordingIfActive();
+  resetTimer();
+  releaseMicrophone();
+  state.liveTranscript = "";
+  const liveBadge = document.getElementById("live-badge");
+  if (liveBadge) liveBadge.style.display = "none";
   if (elements.transcriptInput) {
     elements.transcriptInput.value = "";
   }
@@ -664,6 +1256,46 @@ function initializeSidebarResize() {
   window.addEventListener("mouseleave", stopResizing);
 }
 
+const THEME_STORAGE_KEY = "draft-theme";
+
+function applyTheme(theme) {
+  const resolved = theme === "light" ? "light" : "dark";
+  document.documentElement.setAttribute("data-theme", resolved);
+  try {
+    window.localStorage.setItem(THEME_STORAGE_KEY, resolved);
+  } catch (error) {
+    console.warn("Unable to persist theme preference", error);
+  }
+  const lightButton = document.getElementById("theme-light-btn");
+  const darkButton = document.getElementById("theme-dark-btn");
+  if (lightButton) {
+    lightButton.classList.toggle("active", resolved === "light");
+    lightButton.setAttribute("aria-checked", String(resolved === "light"));
+  }
+  if (darkButton) {
+    darkButton.classList.toggle("active", resolved === "dark");
+    darkButton.setAttribute("aria-checked", String(resolved === "dark"));
+  }
+}
+
+function initializeTheme() {
+  let saved;
+  try {
+    saved = window.localStorage.getItem(THEME_STORAGE_KEY);
+  } catch (error) {
+    saved = null;
+  }
+  // An inline script in index.html already set data-theme before first
+  // paint to avoid a flash; this just syncs the toggle UI and covers pages
+  // where that inline script hasn't run (defensive, same fallback logic).
+  applyTheme(saved || document.documentElement.getAttribute("data-theme") || "dark");
+
+  const lightButton = document.getElementById("theme-light-btn");
+  const darkButton = document.getElementById("theme-dark-btn");
+  if (lightButton) lightButton.addEventListener("click", () => applyTheme("light"));
+  if (darkButton) darkButton.addEventListener("click", () => applyTheme("dark"));
+}
+
 function initializeEventListeners() {
   const newSessionButton = document.getElementById("new-session-btn");
   if (newSessionButton) {
@@ -702,7 +1334,7 @@ function initializeEventListeners() {
   }
 
   if (elements.settingsButton) {
-    elements.settingsButton.addEventListener("click", openSettings);
+    elements.settingsButton.addEventListener("click", () => openSettings());
   }
 
   if (elements.logoutButton) {
@@ -742,19 +1374,72 @@ function initializeEventListeners() {
     submitTranscriptButton.addEventListener("click", submitTranscript);
   }
 
+  if (elements.importFileButton && elements.mediaFileInput) {
+    elements.importFileButton.addEventListener("click", () => elements.mediaFileInput.click());
+    elements.mediaFileInput.addEventListener("change", handleFileUpload);
+  }
+
   const dockRecordButton = document.getElementById("dock-record-btn");
   if (dockRecordButton) {
     dockRecordButton.addEventListener("click", toggleRecord);
   }
+
+  if (elements.createFolderButton) {
+    elements.createFolderButton.addEventListener("click", openCreateFolderModal);
+  }
+  if (elements.createFolderCloseButton) {
+    elements.createFolderCloseButton.addEventListener("click", closeCreateFolderModal);
+  }
+  if (elements.createFolderSubmitButton) {
+    elements.createFolderSubmitButton.addEventListener("click", submitCreateFolder);
+  }
+  if (elements.createFolderModal) {
+    elements.createFolderModal.addEventListener("click", (event) => {
+      if (event.target === elements.createFolderModal) closeCreateFolderModal();
+    });
+  }
+
+  if (elements.deleteFolderButton) {
+    elements.deleteFolderButton.addEventListener("click", () => {
+      if (window.confirm("Delete this folder? Its notes will stay, unfiled.")) {
+        deleteActiveFolder();
+      }
+    });
+  }
+
+  if (elements.selectNotesButton) {
+    elements.selectNotesButton.addEventListener("click", toggleSelectMode);
+  }
+  if (elements.bulkCancelButton) {
+    elements.bulkCancelButton.addEventListener("click", exitSelectMode);
+  }
+  if (elements.bulkDeleteButton) {
+    elements.bulkDeleteButton.addEventListener("click", deleteSelectedSessions);
+  }
+  if (elements.bulkFolderTrigger) {
+    elements.bulkFolderTrigger.addEventListener("click", (event) => {
+      event.stopPropagation();
+      toggleBulkFolderMenu();
+    });
+  }
+  document.addEventListener("click", (event) => {
+    if (elements.bulkFolderWrap && !elements.bulkFolderWrap.contains(event.target)) {
+      toggleBulkFolderMenu(false);
+    }
+  });
 }
 
 async function initializeApp() {
+  initializeTheme();
   initializeSidebarResize();
+  initializeLanguagePicker();
+  initializeSettingsTabs();
+  initializeSummaryLanguagePicker();
   initializeEventListeners();
   renderLucideIcons();
   const user = await fetchCurrentUser();
   if (user) {
-    showAppView(user);
+    await showAppView(user);
   } else {
     // Redirect to the dedicated Firebase-based login page
     window.location.href = "/login";

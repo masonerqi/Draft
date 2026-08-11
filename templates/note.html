@@ -4,10 +4,40 @@
       <h2>Capture or paste a transcript</h2>
       <p class="text-muted">Use the recorder or paste your notes to generate a refined meeting summary.</p>
     </div>
-    <div class="status-badge ready" id="record-status-indicator">
-      <span class="dot"></span>
-      <span id="record-status-text">Ready</span>
-      <span class="live-badge hidden" id="live-badge">Live</span>
+    <div class="transcript-header-actions">
+      <div class="language-select-wrap" id="language-select-wrap">
+        <!-- Source of truth for elements.languageSelect.value; visually
+             hidden in favor of the custom trigger + menu below, which we
+             fully control so flag emoji render correctly (native <select>
+             popups fall back to two-letter codes for flags on some
+             platforms, e.g. Windows). -->
+        <select id="languageSelect" class="language-select-native" tabindex="-1" aria-hidden="true">
+          <option value="en-US" data-flag="🇺🇸" selected>English (US)</option>
+          <option value="en-GB" data-flag="🇬🇧">English (UK)</option>
+          <option value="ms-MY" data-flag="🇲🇾">Bahasa Melayu</option>
+          <option value="zh-CN" data-flag="🇨🇳">Mandarin (Simplified)</option>
+          <option value="ja-JP" data-flag="🇯🇵">Japanese</option>
+          <option value="ko-KR" data-flag="🇰🇷">Korean</option>
+          <option value="es-ES" data-flag="🇪🇸">Spanish</option>
+          <option value="fr-FR" data-flag="🇫🇷">French</option>
+          <option value="de-DE" data-flag="🇩🇪">German</option>
+          <option value="hi-IN" data-flag="🇮🇳">Hindi</option>
+          <option value="ta-IN" data-flag="🇮🇳">Tamil</option>
+        </select>
+
+        <button type="button" class="language-select-trigger" id="language-select-trigger" title="Speech language" aria-haspopup="listbox" aria-expanded="false">
+          <span class="language-select-flag" id="language-select-flag">🇺🇸</span>
+          <span id="language-select-label">English (US)</span>
+          <i data-lucide="chevron-down"></i>
+        </button>
+
+        <ul class="language-select-menu hidden" id="language-select-menu" role="listbox" aria-label="Speech language"></ul>
+      </div>
+      <div class="status-badge ready" id="record-status-indicator">
+        <span class="dot"></span>
+        <span id="record-status-text">Ready</span>
+        <span class="live-badge hidden" id="live-badge">Live</span>
+      </div>
     </div>
   </div>
   <textarea class="transcription-textarea" id="transcript-input" placeholder="Type your notes or record live audio from the mic."></textarea>

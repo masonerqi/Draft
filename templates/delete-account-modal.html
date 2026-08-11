@@ -1,0 +1,26 @@
+<div class="modal hidden" id="delete-account-modal">
+  <div class="modal-panel">
+    <div class="modal-header">
+      <div>
+        <h2>Delete account</h2>
+        <p>This permanently deletes your account, notes, summaries, and settings.</p> 
+        <p><strong>This action cannot be undone.</strong></p>
+      </div>
+      <button type="button" class="icon-button" id="delete-account-close-btn" aria-label="Close">
+        <i data-lucide="x"></i>
+      </button>
+    </div>
+    <div class="modal-body">
+      <div class="modal-field">
+        <label for="delete-account-confirm-input">Type <strong>DELETE</strong> to confirm account destruction</label>
+        <input id="delete-account-confirm-input" type="text" autocomplete="off" placeholder="DELETE" />
+      </div>
+      <div class="auth-error" id="delete-account-error"></div>
+    </div>
+    <div class="modal-footer">
+      <button type="button" class="btn-danger" id="delete-account-confirm-btn" disabled>
+        <i data-lucide="trash-2"></i>Permanently delete account
+      </button>
+    </div>
+  </div>
+</div>

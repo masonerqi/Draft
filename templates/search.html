@@ -1,12 +1,38 @@
 <section class="dashboard-view search-view hidden" id="search-view">
   <div class="search-heading">
-    <h2>Search notes</h2>
-    <p>Find a previous meeting by its summary or date.</p>
+    <div>
+      <h2>Search notes</h2>
+      <p>Find a previous meeting by its summary or date.</p>
+    </div>
+    <button type="button" class="btn-outline" id="select-notes-btn">
+      <i data-lucide="check-square"></i>
+      <span>Select</span>
+    </button>
   </div>
   <label class="search-box" for="session-search-input">
     <i data-lucide="search"></i>
     <input id="session-search-input" type="search" placeholder="Search all notes" autocomplete="off" />
   </label>
+
+  <div class="bulk-actions-bar hidden" id="bulk-actions-bar">
+    <span id="bulk-selected-count">0 selected</span>
+    <div class="bulk-actions-buttons">
+      <div class="dropdown-wrap" id="bulk-folder-wrap">
+        <button type="button" class="dropdown-trigger" id="bulk-folder-trigger">
+          <i data-lucide="folder"></i>
+          <span>Add to folder</span>
+          <i data-lucide="chevron-down"></i>
+        </button>
+        <ul class="dropdown-menu hidden" id="bulk-folder-menu" role="listbox" aria-label="Choose folder"></ul>
+      </div>
+      <button type="button" class="dropdown-trigger bulk-delete-trigger" id="bulk-delete-btn">
+        <i data-lucide="trash-2"></i>
+        <span>Delete</span>
+      </button>
+      <button type="button" class="text-button" id="bulk-cancel-btn">Cancel</button>
+    </div>
+  </div>
+
   <ul class="history-list home-history-list" id="search-results-list">
     <li class="history-empty">Start typing to search your saved notes.</li>
   </ul>

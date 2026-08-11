@@ -6,8 +6,11 @@ from werkzeug.security import generate_password_hash, check_password_hash
 
 DB_PATH = os.environ.get("DATABASE_PATH")
 if not DB_PATH:
-    # default to persistent path inside container /app/data/database.db
-    DB_PATH = os.path.join(os.getcwd(), "data", "database.db")
+    # Anchored to this file's own directory rather than the process's cwd —
+    # cwd varies depending on how/where the server is launched (terminal,
+    # IDE run config, debugger), which previously made the resolved DB file
+    # inconsistent across runs and made data look like it was disappearing.
+    DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "database.db")
 
 
 def get_db_connection():
@@ -53,6 +56,18 @@ def init_db():
     """)
     conn.commit()
 
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS folders (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            name TEXT NOT NULL,
+            icon TEXT NOT NULL,
+            created_at DATETIME NOT NULL,
+            FOREIGN KEY(user_id) REFERENCES users(id)
+        )
+    """)
+    conn.commit()
+
     # Migration checks for existing databases
     cursor.execute("PRAGMA table_info(users)")
     user_columns = [row[1] for row in cursor.fetchall()]
@@ -65,6 +80,9 @@ def init_db():
     if "name" not in user_columns:
         cursor.execute("ALTER TABLE users ADD COLUMN name TEXT")
         conn.commit()
+    if "summary_language" not in user_columns:
+        cursor.execute("ALTER TABLE users ADD COLUMN summary_language TEXT")
+        conn.commit()
 
     cursor.execute("PRAGMA table_info(sessions)")
     columns = [row[1] for row in cursor.fetchall()]
@@ -73,6 +91,9 @@ def init_db():
         conn.commit()
     if "user_id" not in columns:
         cursor.execute("ALTER TABLE sessions ADD COLUMN user_id INTEGER")
+        conn.commit()
+    if "folder_id" not in columns:
+        cursor.execute("ALTER TABLE sessions ADD COLUMN folder_id INTEGER")
         conn.commit()
 
     conn.close()
@@ -108,17 +129,34 @@ def get_all_sessions(user_id=None):
     cursor = conn.cursor()
     if user_id is not None:
         cursor.execute(
-            "SELECT id, created_at, input_type, filename, summary FROM sessions WHERE user_id = ? ORDER BY created_at DESC",
+            "SELECT id, created_at, input_type, filename, summary, folder_id FROM sessions WHERE user_id = ? ORDER BY created_at DESC",
             (user_id,)
         )
     else:
         cursor.execute(
-            "SELECT id, created_at, input_type, filename, summary FROM sessions ORDER BY created_at DESC"
+            "SELECT id, created_at, input_type, filename, summary, folder_id FROM sessions ORDER BY created_at DESC"
         )
     rows = cursor.fetchall()
     conn.close()
     return [
-        {"id": r[0], "created_at": r[1], "input_type": r[2], "filename": r[3], "summary": r[4]}
+        {"id": r[0], "created_at": r[1], "input_type": r[2], "filename": r[3], "summary": r[4], "folder_id": r[5]}
+        for r in rows
+    ]
+
+
+def get_sessions_by_folder(user_id, folder_id):
+    # Folders are scoped per-user, so this stays consistent with
+    # get_all_sessions' user scoping even though folder_id alone is unique.
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT id, created_at, input_type, filename, summary, folder_id FROM sessions WHERE user_id = ? AND folder_id = ? ORDER BY created_at DESC",
+        (user_id, folder_id)
+    )
+    rows = cursor.fetchall()
+    conn.close()
+    return [
+        {"id": r[0], "created_at": r[1], "input_type": r[2], "filename": r[3], "summary": r[4], "folder_id": r[5]}
         for r in rows
     ]
 
@@ -172,6 +210,65 @@ def delete_session(session_id, user_id=None):
         cursor.execute("DELETE FROM sessions WHERE id = ? AND user_id = ?", (session_id, user_id))
     else:
         cursor.execute("DELETE FROM sessions WHERE id = ?", (session_id,))
+    conn.commit()
+    conn.close()
+
+
+def create_folder(user_id, name, icon):
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute(
+        "INSERT INTO folders (user_id, name, icon, created_at) VALUES (?, ?, ?, ?)",
+        (user_id, name, icon, datetime.now().isoformat())
+    )
+    conn.commit()
+    folder_id = cursor.lastrowid
+    conn.close()
+    return {"id": folder_id, "name": name, "icon": icon, "note_count": 0}
+
+
+def get_folders(user_id):
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT folders.id, folders.name, folders.icon, COUNT(sessions.id)
+        FROM folders
+        LEFT JOIN sessions ON sessions.folder_id = folders.id
+        WHERE folders.user_id = ?
+        GROUP BY folders.id
+        ORDER BY folders.created_at ASC
+    """, (user_id,))
+    rows = cursor.fetchall()
+    conn.close()
+    return [
+        {"id": r[0], "name": r[1], "icon": r[2], "note_count": r[3]}
+        for r in rows
+    ]
+
+
+def delete_folder(folder_id, user_id):
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    # Notes are never deleted with their folder — just unfiled.
+    cursor.execute(
+        "UPDATE sessions SET folder_id = NULL WHERE folder_id = ? AND user_id = ?",
+        (folder_id, user_id)
+    )
+    cursor.execute("DELETE FROM folders WHERE id = ? AND user_id = ?", (folder_id, user_id))
+    conn.commit()
+    conn.close()
+
+
+def assign_sessions_to_folder(session_ids, user_id, folder_id):
+    if not session_ids:
+        return
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    placeholders = ",".join("?" for _ in session_ids)
+    cursor.execute(
+        f"UPDATE sessions SET folder_id = ? WHERE id IN ({placeholders}) AND user_id = ?",
+        (folder_id, *session_ids, user_id)
+    )
     conn.commit()
     conn.close()
 
@@ -261,6 +358,27 @@ def create_or_get_user_from_firebase(firebase_uid, email=None, name=None):
     return {"id": row[0], "username": row[1], "password_hash": row[2], "firebase_uid": row[3], "name": row[4], "created_at": row[5]}
 
 
+def update_user_email(user_id, email):
+    # `username` doubles as the login email, so this is the single place
+    # that needs updating when Firebase confirms a new address.
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute("UPDATE users SET username = ? WHERE id = ?", (email, user_id))
+    conn.commit()
+    conn.close()
+
+
+def delete_user_account(user_id):
+    """Cascade-deletes everything owned by a user, then the user row itself."""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM sessions WHERE user_id = ?", (user_id,))
+    cursor.execute("DELETE FROM folders WHERE user_id = ?", (user_id,))
+    cursor.execute("DELETE FROM users WHERE id = ?", (user_id,))
+    conn.commit()
+    conn.close()
+
+
 def get_user_by_username(username):
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
@@ -290,6 +408,27 @@ def set_user_api_key(user_id, api_key):
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     cursor.execute("UPDATE users SET gemini_api_key = ? WHERE id = ?", (api_key, user_id))
+    conn.commit()
+    conn.close()
+
+
+def get_user_summary_language(user_id):
+    # NULL/empty means "match the transcript's language" (Gemini's existing
+    # default behavior when no language is specified).
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute("SELECT summary_language FROM users WHERE id = ?", (user_id,))
+    row = cursor.fetchone()
+    conn.close()
+    if not row:
+        return None
+    return row[0]
+
+
+def set_user_summary_language(user_id, language):
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute("UPDATE users SET summary_language = ? WHERE id = ?", (language, user_id))
     conn.commit()
     conn.close()
 

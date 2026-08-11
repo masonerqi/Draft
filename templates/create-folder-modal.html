@@ -1,0 +1,29 @@
+<div class="modal hidden" id="create-folder-modal">
+  <div class="modal-panel">
+    <div class="modal-header">
+      <div>
+        <h2>Create folder</h2>
+        <p>Organize your notes into a folder.</p>
+      </div>
+      <button type="button" class="icon-button" id="create-folder-close-btn" aria-label="Close">
+        <i data-lucide="x"></i>
+      </button>
+    </div>
+    <div class="modal-body">
+      <div class="modal-field">
+        <label for="folder-name-input">Folder name</label>
+        <input id="folder-name-input" type="text" autocomplete="off" placeholder="e.g. Lecture notes" />
+      </div>
+      <div class="modal-field">
+        <label>Icon</label>
+        <div class="icon-picker" id="folder-icon-picker"></div>
+      </div>
+      <div class="auth-error" id="create-folder-error"></div>
+    </div>
+    <div class="modal-footer">
+      <button type="button" class="button" id="create-folder-submit-btn">
+        <i data-lucide="folder-plus"></i>Create folder
+      </button>
+    </div>
+  </div>
+</div>

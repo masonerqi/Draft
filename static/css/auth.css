@@ -5,6 +5,58 @@
   margin-inline: auto;
 }
 
+/* Notion-inspired floating label fields: no box borders, just a
+   bottom rule that darkens on focus, with the label riding up out
+   of the way once the field has a value. */
+.card--auth .floating-label {
+  position: relative;
+  margin-bottom: 26px;
+}
+
+.card--auth .floating-label input {
+  width: 100%;
+  margin: 0;
+  padding: 12px 2px 10px;
+  border: none;
+  border-bottom: 1.5px solid var(--border, #E0DFDA);
+  border-radius: 0;
+  background: transparent;
+  font-size: 15px;
+  color: var(--text-primary, #121212);
+  box-shadow: none;
+  transition: border-color 0.2s var(--ease-standard, ease);
+}
+
+.card--auth .floating-label input:hover {
+  border-bottom-color: #C7C5BE;
+}
+
+.card--auth .floating-label input:focus {
+  outline: none;
+  border-bottom-color: var(--text-primary, #121212);
+  box-shadow: none;
+}
+
+.card--auth .floating-label label {
+  position: absolute;
+  left: 2px;
+  top: 12px;
+  margin: 0;
+  color: var(--text-muted, #8C8C8C);
+  font-size: 15px;
+  font-weight: 500;
+  pointer-events: none;
+  transform-origin: left top;
+  transition: transform 0.18s var(--ease-standard, ease), color 0.18s var(--ease-standard, ease);
+}
+
+.card--auth .floating-label input:focus + label,
+.card--auth .floating-label input:not(:placeholder-shown) + label {
+  transform: translateY(-19px) scale(0.78);
+  color: var(--text-primary, #121212);
+  font-weight: 600;
+}
+
 .card--auth .auth-intro {
   color: var(--text-muted, #666);
   font-size: 0.9rem;
