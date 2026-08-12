@@ -17,7 +17,7 @@ MAX_UPLOAD_BYTES = 300 * 1024 * 1024
 load_dotenv()
 
 # Import database init function
-from database import init_db
+from database import init_db, start_usage_log_cleanup_thread
 from firebase_config import init_firebase
 
 # Blueprints will be imported and registered in the factory
@@ -53,6 +53,12 @@ def create_app(test_config=None):
 
     # Initialize or migrate the database
     init_db()
+
+    # Periodic sweep of usage_logs rows older than the longest rolling quota
+    # window (1 day). Skipped under pytest/test_config so test runs don't
+    # leak background threads.
+    if not (test_config or os.environ.get("PYTEST_CURRENT_TEST")):
+        start_usage_log_cleanup_thread()
 
     # Register blueprints
     from routes.auth import auth_bp

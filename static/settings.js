@@ -73,9 +73,11 @@ function initEmailUpdate() {
 
   // Google (and other federated) accounts don't have a Firebase password-auth
   // email to change here — Google owns that identity, so swap the editable
-  // field for a plain read-only line instead of letting the user attempt it.
-  // Password accounts that haven't confirmed their email get a small
-  // "Unverified" badge plus an inline resend action instead of a full card.
+  // field for a plain read-only line instead of letting the user attempt it
+  // (and skip the verified/unverified badge entirely, since Google already
+  // vouches for that address). Password accounts get a small badge: amber
+  // "Unverified" plus an inline resend action until they confirm the email,
+  // then a green "Verified" badge once they have.
   function applyProviderState(user) {
     const isGoogleUser = (user.providerData || []).some((p) => p.providerId === "google.com");
     emailField?.classList.toggle("hidden", isGoogleUser);
@@ -85,9 +87,13 @@ function initEmailUpdate() {
       googleEmail.textContent = user.email || "";
     }
 
-    const needsVerification = !isGoogleUser && !user.emailVerified;
-    verifyBadge?.classList.toggle("hidden", !needsVerification);
-    resendBtn.classList.toggle("hidden", !needsVerification);
+    verifyBadge?.classList.toggle("hidden", isGoogleUser);
+    resendBtn.classList.toggle("hidden", isGoogleUser || user.emailVerified);
+    if (verifyBadge && !isGoogleUser) {
+      verifyBadge.textContent = user.emailVerified ? "Verified" : "Unverified";
+      verifyBadge.classList.toggle("status-pill--success", user.emailVerified);
+      verifyBadge.classList.toggle("status-pill--warning", !user.emailVerified);
+    }
   }
 
   // Keep the field pre-filled with whichever address Firebase currently has
@@ -150,6 +156,78 @@ function initEmailUpdate() {
         : "Unable to send the verification email right now. Please try again.";
     } finally {
       resendBtn.disabled = false;
+    }
+  });
+}
+
+function initNameUpdate() {
+  const input = document.getElementById("name-input");
+  const nameField = document.getElementById("name-field");
+  const updateBtn = document.getElementById("update-name-btn");
+  const errorEl = document.getElementById("name-update-error");
+  const bannerEl = document.getElementById("name-update-banner");
+  const googleNote = document.getElementById("name-google-account-note");
+  const googleValue = document.getElementById("name-google-account-value");
+  if (!input || !updateBtn || !errorEl || !bannerEl) return;
+
+  function clearFeedback() {
+    errorEl.textContent = "";
+    bannerEl.classList.add("hidden");
+    bannerEl.textContent = "";
+  }
+
+  // Google manages the name on a Google-linked account — swap the editable
+  // field for a read-only line instead of letting the user attempt an edit
+  // that would just drift from what Google actually has on file, the same
+  // way the Email Address card handles Google accounts above.
+  function applyNameProviderState(user) {
+    const isGoogleUser = (user.providerData || []).some((p) => p.providerId === "google.com");
+    nameField?.classList.toggle("hidden", isGoogleUser);
+    updateBtn.style.display = isGoogleUser ? "none" : "";
+    googleNote?.classList.toggle("hidden", !isGoogleUser);
+    if (isGoogleUser && googleValue) {
+      googleValue.textContent = user.displayName || user.email || "";
+    }
+  }
+
+  onAuthStateChanged(auth, (user) => {
+    if (!user) return;
+    applyNameProviderState(user);
+  });
+
+  updateBtn.addEventListener("click", async () => {
+    clearFeedback();
+
+    const name = input.value.trim();
+    if (!name) {
+      errorEl.textContent = "Please enter your name.";
+      return;
+    }
+
+    updateBtn.disabled = true;
+    try {
+      const res = await fetch("/api/user/settings", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "same-origin",
+        body: JSON.stringify({ name }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        errorEl.textContent = data.error || "Failed to update your name.";
+        return;
+      }
+      bannerEl.textContent = "Your name has been updated.";
+      bannerEl.classList.remove("hidden");
+      // Defined in app.js (loaded first, non-module, so it lands on
+      // `window`) — refreshes the sidebar/settings profile displays without
+      // the heavier full-view reload that showAppView() would trigger.
+      window.refreshProfileDisplay?.();
+    } catch (error) {
+      console.error("Name update error:", error);
+      errorEl.textContent = "Something went wrong updating your name. Please try again.";
+    } finally {
+      updateBtn.disabled = false;
     }
   });
 }
@@ -246,6 +324,7 @@ function initDeleteAccount() {
 }
 
 function initSettingsPage() {
+  initNameUpdate();
   initEmailUpdate();
   initDeleteAccount();
 }

@@ -12,8 +12,12 @@ from database import (
     set_user_summary_language,
     create_or_get_user_from_firebase,
     update_user_email,
+    update_user_name,
     delete_user_account,
 )
+
+# Mirrors the <input maxlength> in templates/settings.html's Full Name card.
+MAX_NAME_LENGTH = 80
 
 # Import Firebase Admin SDK auth gracefully. If it is not available, the server
 # will still start but auth routes will return a clear error message.
@@ -258,6 +262,7 @@ def get_user_settings():
         'api_key_saved': bool(api_key),
         'api_key_masked': _mask_api_key(api_key),
         'summary_language': get_user_summary_language(current_user['id']),
+        'name': current_user.get('name'),
     }), 200
 
 
@@ -267,12 +272,28 @@ def update_user_settings():
     current_user = get_current_user()
     payload = _parse_request_payload()
 
-    # Each settings field is independently optional so the API key form and
-    # the Summary language picker can each save without touching the other.
-    if 'gemini_api_key' not in payload and 'summary_language' not in payload:
+    # Each settings field is independently optional so the API key form, the
+    # Summary language picker, and the Full Name field can each save without
+    # touching the others.
+    if 'gemini_api_key' not in payload and 'summary_language' not in payload and 'name' not in payload:
         return jsonify({'error': 'No settings provided.'}), 400
 
     response = {}
+
+    if 'name' in payload:
+        # Google-linked accounts have their name managed by Google — the
+        # client hides/disables this field for them (see settings.js), the
+        # same way it already handles the Email Address field. A plain
+        # username/password account's name lives only in our own DB, so it's
+        # always editable here.
+        name = (payload.get('name') or '').strip()
+        if not name:
+            return jsonify({'error': 'Name is required.'}), 400
+        if len(name) > MAX_NAME_LENGTH:
+            return jsonify({'error': f'Name must be {MAX_NAME_LENGTH} characters or fewer.'}), 400
+        update_user_name(current_user['id'], name)
+        session['user_name'] = name
+        response['name'] = name
 
     if 'gemini_api_key' in payload:
         api_key = (payload.get('gemini_api_key') or '').strip()

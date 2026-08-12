@@ -32,12 +32,44 @@
           <i data-lucide="key-round"></i>
           <span>API Key</span>
         </button>
+
+        <div class="settings-nav-spacer"></div>
+        <button type="button" class="nav-item settings-nav-item--danger" id="settings-logout-btn">
+          <i data-lucide="log-out"></i>
+          <span>Log out</span>
+        </button>
       </nav>
 
       <div class="settings-content">
         <section class="settings-tab-panel" data-settings-panel="profile">
           <h2>Profile</h2>
           <p class="settings-panel-copy">Your account details.</p>
+
+          <div class="settings-card">
+            <h3>Full Name</h3>
+            <p>The name shown across Draft.</p>
+
+            <div class="modal-field" id="name-field">
+              <input id="name-input" type="text" autocomplete="name" maxlength="80" placeholder="Your name" value="{{ (name if (name and name != email) else '') }}" />
+            </div>
+
+            <div class="google-account-row hidden" id="name-google-account-note">
+              <img src="https://www.gstatic.com/firebasejs/ui/2.0.0/images/auth/google.svg" alt="" />
+              <div class="google-account-text">
+                <span class="google-account-email" id="name-google-account-value"></span>
+                <span class="google-account-caption">Managed by your Google Account</span>
+              </div>
+            </div>
+
+            <div class="auth-error" id="name-update-error"></div>
+            <p class="settings-banner hidden" id="name-update-banner"></p>
+
+            <div class="settings-card-actions">
+              <button type="button" class="button" id="update-name-btn">
+                <i data-lucide="user-round-pen"></i>Save name
+              </button>
+            </div>
+          </div>
 
           <div class="settings-card">
             <div class="settings-card-heading">
@@ -137,6 +169,65 @@
             <button type="button" class="button" id="settings-save-btn">
               <i data-lucide="save"></i>Save key
             </button>
+          </div>
+
+          <div class="settings-card quota-card" id="quota-card">
+            <div class="settings-card-heading">
+              <h3>Gemini rate limits</h3>
+              <span class="quota-tier-pill" id="quota-tier-pill">
+                <i data-lucide="gauge"></i><span id="quota-tier-label">Free tier</span>
+              </span>
+            </div>
+            <p>A live local estimate of how close this key is to Google's rate limits, tracked from requests made through Draft.</p>
+
+            <div class="quota-alert hidden" id="quota-alert">
+              <i data-lucide="alert-triangle"></i>
+              <span id="quota-alert-text"></span>
+            </div>
+
+            <div class="quota-primary" id="quota-primary">
+              <div class="quota-ring" id="quota-ring">
+                <svg viewBox="0 0 72 72" class="quota-ring-svg">
+                  <circle class="quota-ring-track" cx="36" cy="36" r="30"></circle>
+                  <circle class="quota-ring-fill" id="quota-ring-fill" cx="36" cy="36" r="30"></circle>
+                </svg>
+                <div class="quota-ring-center">
+                  <span class="quota-ring-value" id="quota-ring-value">--</span>
+                  <span class="quota-ring-unit">%</span>
+                </div>
+              </div>
+              <div class="quota-primary-copy">
+                <span class="quota-primary-label" id="quota-primary-label">Loading usage…</span>
+                <span class="quota-primary-caption" id="quota-primary-caption">Fetching your current rate-limit status.</span>
+              </div>
+            </div>
+
+            <div class="quota-dimensions" id="quota-dimensions">
+              <div class="quota-dim" data-dim="rpm">
+                <div class="quota-dim-head">
+                  <span class="quota-dim-name"><i data-lucide="zap"></i>Requests / min</span>
+                  <span class="quota-dim-count" id="quota-rpm-count">-- / --</span>
+                </div>
+                <div class="quota-dim-track"><div class="quota-dim-fill" id="quota-rpm-fill"></div></div>
+              </div>
+              <div class="quota-dim" data-dim="tpm">
+                <div class="quota-dim-head">
+                  <span class="quota-dim-name"><i data-lucide="cpu"></i>Tokens / min</span>
+                  <span class="quota-dim-count" id="quota-tpm-count">-- / --</span>
+                </div>
+                <div class="quota-dim-track"><div class="quota-dim-fill" id="quota-tpm-fill"></div></div>
+              </div>
+              <div class="quota-dim" data-dim="rpd">
+                <div class="quota-dim-head">
+                  <span class="quota-dim-name"><i data-lucide="calendar-clock"></i>Requests / day</span>
+                  <span class="quota-dim-count" id="quota-rpd-count">-- / --</span>
+                </div>
+                <div class="quota-dim-track"><div class="quota-dim-fill" id="quota-rpd-fill"></div></div>
+              </div>
+            </div>
+
+            <p class="quota-footnote">Estimated locally — Google enforces the real limit on your key, so this can drift if the key is also used elsewhere.</p>
+            <p class="quota-footnote">For a more detailed view of rate limits, please visit <a href="https://aistudio.google.com/rate-limit?timeRange=last-7-days" target="_blank" rel="noopener">Google AI Studio</a>.</p>
           </div>
         </section>
       </div>

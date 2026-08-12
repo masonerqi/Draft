@@ -123,6 +123,8 @@ body { font-size: 14px; }
 .status-pill { padding: 2px 8px; border-radius: 99px; font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .03em; }
 .status-pill--warning { background: #FFF6E5; color: #8A5A00; }
 :root[data-theme="dark"] .status-pill--warning { background: rgba(217, 164, 65, .18); color: #E0B75C; }
+.status-pill--success { background: #EAFBF1; color: #15803D; }
+:root[data-theme="dark"] .status-pill--success { background: rgba(34, 197, 94, .18); color: #4ADE80; }
 
 /* Row of a settings card's action buttons (e.g. Update Email + the inline
    Resend verification email prompt that only shows up when needed) */
@@ -144,6 +146,84 @@ body { font-size: 14px; }
 .btn-danger:hover:not(:disabled) { background: #9C3A3A; transform: translateY(-1px); }
 .btn-danger:disabled { opacity: .45; cursor: not-allowed; transform: none; }
 .btn-danger i { width: 15px; height: 15px; }
+
+/* Gemini rate-limit indicator (Settings > API key only). Status color is
+   driven by three custom properties set inline per element by app.js
+   (--quota-color / --quota-glow / --quota-pct), so the same markup covers
+   "plenty of room" / "warning" / "critical" without swapping classes. */
+.quota-card {
+  --quota-ok: var(--green);
+  --quota-warn: #C98A1D;
+  --quota-critical: var(--red);
+  position: relative;
+  overflow: hidden;
+  gap: 16px;
+  background: linear-gradient(165deg, var(--surface) 0%, var(--surface-subtle) 100%);
+}
+:root[data-theme="dark"] .quota-card { --quota-warn: #E0B75C; }
+.quota-card::before {
+  content: "";
+  position: absolute;
+  top: -60%;
+  right: -20%;
+  width: 220px;
+  height: 220px;
+  background: radial-gradient(circle, var(--quota-color, var(--quota-ok)) 0%, transparent 70%);
+  opacity: .14;
+  pointer-events: none;
+  transition: background .3s ease;
+}
+
+.quota-tier-pill { display: inline-flex; align-items: center; gap: 5px; margin-left: auto; padding: 3px 10px; border-radius: 99px; background: var(--surface-hover); color: var(--ink-soft); font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; }
+.quota-tier-pill i { width: 11px; height: 11px; }
+
+.quota-alert { display: flex; align-items: flex-start; gap: 9px; padding: 10px 12px; border-radius: var(--radius-sm); background: rgba(224, 133, 133, .12); color: var(--red); font-size: 12.5px; line-height: 1.55; }
+.quota-alert i { flex: 0 0 auto; width: 15px; height: 15px; margin-top: 1px; }
+
+.quota-primary { position: relative; z-index: 1; display: flex; align-items: center; gap: 18px; }
+
+.quota-ring { position: relative; flex: 0 0 auto; width: 72px; height: 72px; }
+.quota-ring-svg { width: 100%; height: 100%; transform: rotate(-90deg); }
+.quota-ring-track { fill: none; stroke: var(--line); stroke-width: 6; }
+.quota-ring-fill {
+  fill: none;
+  stroke: var(--quota-color, var(--quota-ok));
+  stroke-width: 6;
+  stroke-linecap: round;
+  stroke-dasharray: 188.5;
+  stroke-dashoffset: 188.5;
+  filter: drop-shadow(0 0 5px var(--quota-glow, transparent));
+  transition: stroke-dashoffset .5s var(--ease-standard, ease), stroke .3s ease, filter .3s ease;
+}
+.quota-ring-center { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; line-height: 1; }
+.quota-ring-value { font-size: 17px; font-weight: 750; color: var(--ink); letter-spacing: -.02em; }
+.quota-ring-unit { margin-top: 1px; color: var(--ink-faint); font-size: 9.5px; font-weight: 650; }
+
+.quota-primary-copy { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.quota-primary-label { color: var(--ink); font-size: 14.5px; font-weight: 680; letter-spacing: -.01em; }
+.quota-primary-caption { color: var(--ink-soft); font-size: 12px; }
+
+.quota-dimensions { position: relative; z-index: 1; display: grid; gap: 12px; }
+.quota-dim-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; font-size: 12px; }
+.quota-dim-name { display: inline-flex; align-items: center; gap: 6px; color: var(--ink-soft); font-weight: 600; }
+.quota-dim-name i { width: 12px; height: 12px; color: var(--ink-faint); }
+.quota-dim-count { color: var(--ink); font-variant-numeric: tabular-nums; font-weight: 650; }
+.quota-dim-track { position: relative; height: 6px; border-radius: 99px; background: var(--surface-hover); overflow: hidden; }
+.quota-dim-fill {
+  height: 100%;
+  width: 0%;
+  border-radius: 99px;
+  background: linear-gradient(90deg, var(--quota-color, var(--quota-ok)) 0%, color-mix(in srgb, var(--quota-color, var(--quota-ok)) 70%, white) 100%);
+  transition: width .5s var(--ease-standard, ease), background .3s ease;
+}
+.quota-dim.quota-dim--critical .quota-dim-fill { animation: quota-pulse 1.6s ease-in-out infinite; }
+
+@keyframes quota-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: .6; }
+}
+
+.quota-footnote { position: relative; z-index: 1; margin: 0; color: var(--ink-faint); font-size: 11px; line-height: 1.5; }
 
 /* Dark-only literals: main.css already has the correct light-mode value for
    each of these (unscoped, so it applies whenever this block doesn't). */

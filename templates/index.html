@@ -16,8 +16,8 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Lora:ital,wght@1,500;1,600&display=swap" />
-  <link rel="stylesheet" href="/static/css/main.css?v=4" />
-  <link rel="stylesheet" href="/static/css/workspace.css?v=2" />
+  <link rel="stylesheet" href="/static/css/main.css?v=8" />
+  <link rel="stylesheet" href="/static/css/workspace.css?v=3" />
   <script src="https://unpkg.com/lucide@latest"></script>
 </head>
 <body>
@@ -41,33 +41,45 @@
 
         <div class="section-title">
           <div>
-            <h2>Summary Analysis</h2>
+            <div class="result-heading-row">
+              <h2>Summary Analysis</h2>
+              <span class="detected-type-badge hidden" id="result-type-badge"></span>
+            </div>
             <p id="result-meta"></p>
+            <p class="result-overview hidden" id="result-overview"></p>
           </div>
         </div>
 
         <div class="result-grid">
-          <div class="result-card">
+          <!-- Legacy flat-shape card — only shown for summaries saved before
+               the adaptive schema (no detected_type on the record). -->
+          <div class="result-card result-card--wide hidden" id="result-summary-card">
             <h3>Key Discussion Points</h3>
             <p id="result-summary"></p>
           </div>
-          <div class="result-card">
-            <h3>Decisions Made</h3>
+          <!-- Adaptive-shape card — only shown for summaries with a
+               detected_type. -->
+          <div class="result-card result-card--wide hidden" id="result-key-concepts-card">
+            <h3>Key Concepts</h3>
+            <ul id="result-key-concepts"></ul>
+          </div>
+          <div class="result-card" id="result-decisions-card">
+            <h3 id="result-decisions-title">Decisions Made</h3>
             <ul id="result-decisions"></ul>
           </div>
-          <div class="result-card">
+          <div class="result-card" id="result-actions-card">
             <h3>Action Items</h3>
             <ul id="result-actions"></ul>
           </div>
-          <div class="result-card hidden" id="transcript-section">
+          <div class="result-card result-card--wide hidden" id="transcript-section">
             <h3>Full Text Archive</h3>
-            <div class="toggle-block" id="transcript-toggle" onclick="toggleTranscript()">
-              <div class="toggle-header">
+            <div class="toggle-block" id="transcript-toggle">
+              <div class="toggle-header" onclick="toggleTranscript()">
                 <span>Show raw transcript</span>
                 <i data-lucide="chevron-right"></i>
               </div>
+              <div class="toggle-body" id="transcript-text"></div>
             </div>
-            <div class="toggle-body" id="transcript-text"></div>
           </div>
         </div>
 
@@ -76,10 +88,17 @@
             <i data-lucide="chevron-left"></i>
             Return to Recorder
           </button>
-          <button type="button" class="button-secondary text-button" id="exportTextBtn">
-            <i data-lucide="download"></i>
-            Export as .txt
-          </button>
+          <div class="dropdown-wrap" id="export-wrap">
+            <button type="button" class="button-secondary text-button dropdown-trigger" id="export-trigger">
+              <i data-lucide="download"></i>
+              Export
+              <i data-lucide="chevron-down"></i>
+            </button>
+            <ul class="dropdown-menu hidden" id="export-menu">
+              <li class="dropdown-option" data-format="text">Export as .txt</li>
+              <li class="dropdown-option" data-format="docx">Export as .docx</li>
+            </ul>
+          </div>
         </div>
       </section>
 
@@ -100,8 +119,8 @@
   {% include "create-folder-modal.html" %}
   {% include "delete-account-modal.html" %}
 
-  <script src="/static/app.js?v=9" defer></script>
-  <script type="module" src="/static/settings.js?v=4"></script>
+  <script src="/static/app.js?v=13" defer></script>
+  <script type="module" src="/static/settings.js?v=5"></script>
   <script>lucide.createIcons();</script>
 </body>
 </html>

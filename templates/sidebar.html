@@ -34,10 +34,15 @@
   </div>
 
   <div class="sidebar-bottom">
-    <button type="button" class="nav-item" id="settings-btn">
-      <i data-lucide="settings-2"></i>
-      <span>Settings</span>
-    </button>
+    <div class="sidebar-bottom-row">
+      <button type="button" class="nav-item" id="settings-btn">
+        <i data-lucide="settings-2"></i>
+        <span>Settings</span>
+      </button>
+      <button type="button" class="icon-button" id="logout-btn" title="Sign out" aria-label="Sign out">
+        <i data-lucide="log-out"></i>
+      </button>
+    </div>
 
     <div class="sidebar-footer">
       {% set name = user_name or session.get('user_name') %}
@@ -49,9 +54,6 @@
           <span class="profile-email" id="profile-email">{{ email or 'Not signed in' }}</span>
         </div>
       </div>
-      <button type="button" class="icon-button" id="logout-btn" title="Sign out" aria-label="Sign out">
-        <i data-lucide="log-out"></i>
-      </button>
     </div>
   </div>
 </aside>

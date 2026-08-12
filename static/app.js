@@ -20,6 +20,8 @@ const state = {
   selectMode: false,
   selectedSessionIds: new Set(),
   selectedFolderIcon: "folder",
+  quotaPollTimer: null,
+  lastQuota: null,
 };
 
 const elements = {
@@ -44,12 +46,27 @@ const elements = {
   settingsError: document.getElementById("settings-error"),
   settingsStatus: document.getElementById("settings-status"),
   apiKeyInput: document.getElementById("api-key-input"),
+  quotaAlert: document.getElementById("quota-alert"),
+  quotaAlertText: document.getElementById("quota-alert-text"),
+  quotaRingFill: document.getElementById("quota-ring-fill"),
+  quotaRingValue: document.getElementById("quota-ring-value"),
+  quotaPrimaryLabel: document.getElementById("quota-primary-label"),
+  quotaPrimaryCaption: document.getElementById("quota-primary-caption"),
+  quotaTierLabel: document.getElementById("quota-tier-label"),
   loadingOverlay: document.getElementById("loading"),
   loadingMsg: document.getElementById("loading-msg"),
   errorBanner: document.getElementById("error-banner"),
   resultsSummary: document.getElementById("result-summary"),
+  resultSummaryCard: document.getElementById("result-summary-card"),
   resultMeta: document.getElementById("result-meta"),
+  resultTypeBadge: document.getElementById("result-type-badge"),
+  resultOverview: document.getElementById("result-overview"),
+  resultKeyConceptsCard: document.getElementById("result-key-concepts-card"),
+  resultKeyConcepts: document.getElementById("result-key-concepts"),
+  resultDecisionsCard: document.getElementById("result-decisions-card"),
+  resultDecisionsTitle: document.getElementById("result-decisions-title"),
   resultDecisions: document.getElementById("result-decisions"),
+  resultActionsCard: document.getElementById("result-actions-card"),
   resultActions: document.getElementById("result-actions"),
   transcriptSection: document.getElementById("transcript-section"),
   transcriptText: document.getElementById("transcript-text"),
@@ -57,7 +74,9 @@ const elements = {
   languageSelect: document.getElementById("languageSelect"),
   importFileButton: document.getElementById("import-file-btn"),
   mediaFileInput: document.getElementById("media-file-input"),
-  exportButton: document.getElementById("exportTextBtn"),
+  exportWrap: document.getElementById("export-wrap"),
+  exportTrigger: document.getElementById("export-trigger"),
+  exportMenu: document.getElementById("export-menu"),
   newSessionButton: document.getElementById("new-session-btn"),
   folderList: document.getElementById("folder-list"),
   createFolderButton: document.getElementById("create-folder-btn"),
@@ -259,6 +278,26 @@ async function showAppView(user) {
   showHome();
 }
 
+// Re-fetches /me and re-paints just the name/initials shown in the sidebar
+// and settings profile card — used after a Settings > Profile name save, as
+// a lighter alternative to showAppView()'s full history/folders reload.
+async function refreshProfileDisplay() {
+  const user = await fetchCurrentUser();
+  if (!user) return;
+  state.currentUser = user;
+
+  const displayName = getFormattedDisplayName(user);
+
+  if (elements.profileName) elements.profileName.textContent = displayName;
+  if (elements.profileInitials) elements.profileInitials.textContent = formatInitials(displayName);
+
+  const settingsName = document.getElementById("settings-profile-name");
+  const settingsInitials = document.getElementById("settings-profile-initials");
+  if (settingsName) settingsName.textContent = displayName;
+  if (settingsInitials) settingsInitials.textContent = formatInitials(displayName);
+}
+window.refreshProfileDisplay = refreshProfileDisplay;
+
 // Legacy inline auth removed. Authentication now happens on /login (Firebase-backed).
 // The client must redirect to /login when no active session is found.
 
@@ -456,6 +495,49 @@ async function submitTranscript() {
 // oversized file fails fast instead of uploading first and failing later.
 const MAX_UPLOAD_BYTES = 300 * 1024 * 1024;
 
+// Mirrors quota.py's AUDIO_TOKENS_PER_SECOND / OUTPUT_TOKEN_BUFFER — a
+// client-side version of the same estimate so an oversized file can warn
+// before the user waits through an upload that the server will reject.
+const CLIENT_AUDIO_TOKENS_PER_SECOND = 32;
+const CLIENT_OUTPUT_TOKEN_BUFFER = 1500;
+
+function getAudioDurationSeconds(file) {
+  return new Promise((resolve) => {
+    const url = URL.createObjectURL(file);
+    const probe = document.createElement("audio");
+    const cleanup = () => URL.revokeObjectURL(url);
+    probe.preload = "metadata";
+    probe.onloadedmetadata = () => {
+      const duration = Number.isFinite(probe.duration) ? probe.duration : null;
+      cleanup();
+      resolve(duration);
+    };
+    probe.onerror = () => {
+      cleanup();
+      resolve(null);
+    };
+    probe.src = url;
+  });
+}
+
+async function warnIfAudioExceedsQuota(file) {
+  const duration = await getAudioDurationSeconds(file);
+  // Browser couldn't read the header (unsupported/corrupt file) — let the
+  // server's own pre-flight check be the judge instead of blocking here.
+  if (duration === null) return true;
+
+  const quotaData = state.lastQuota || (await fetchQuotaStatus());
+  if (!quotaData) return true;
+
+  const estimatedTokens = Math.round(duration * CLIENT_AUDIO_TOKENS_PER_SECOND) + CLIENT_OUTPUT_TOKEN_BUFFER;
+  if (estimatedTokens <= quotaData.tpm.remaining) return true;
+
+  return confirm(
+    `This ~${Math.max(1, Math.round(duration / 60))} min file needs roughly ${formatQuotaCount(estimatedTokens)} tokens, ` +
+    `but only about ${formatQuotaCount(quotaData.tpm.remaining)} are left this minute. It will likely be rate-limited. Upload anyway?`
+  );
+}
+
 async function handleFileUpload(event) {
   const file = event.target.files && event.target.files[0];
   // Reset immediately (not just on success) so re-selecting the same
@@ -468,6 +550,8 @@ async function handleFileUpload(event) {
     alert(`That file is too large (max ${MAX_UPLOAD_BYTES / (1024 * 1024)}MB). Try a shorter recording or a more compressed format.`);
     return;
   }
+
+  if (!(await warnIfAudioExceedsQuota(file))) return;
 
   stopRecordingIfActive();
   state.activeSessionId = null;
@@ -500,6 +584,19 @@ async function submitToAPI(formData, msg) {
         hideLoading();
         return;
       }
+      // Rate-limit 429s (pre-flight rejection or a passthrough from a real
+      // Gemini 429) carry a real reset time — surface that instead of a
+      // generic message, and refresh the quota indicator in case Settings
+      // is opened next.
+      if (res.status === 429) {
+        const resetSeconds = data.resets_in_seconds ?? data.retry_after_seconds;
+        const resetText = typeof resetSeconds === "number" ? ` Try again in ${formatQuotaDuration(resetSeconds)}.` : "";
+        hideLoading();
+        showInput();
+        showError(`${errorMessage}${resetText}`);
+        fetchQuotaStatus();
+        return;
+      }
       alert("Error: " + errorMessage);
       hideLoading();
       showInput();
@@ -514,52 +611,161 @@ async function submitToAPI(formData, msg) {
   }
 }
 
-function showResults(data) {
-  hideLoading();
-  state.activeSessionId = data.session_id || data.id || null;
-  elements.resultsSummary.textContent = data.summary || "No summary available.";
+// Minimal, intentionally-scoped markdown: only "**bold**" is supported,
+// matching what the backend's system instructions ask Gemini to produce for
+// bullet labels (see gemini_client.py's SYSTEM_INSTRUCTION_TEMPLATE). The
+// source string is HTML-escaped first via the existing escapeHtml() helper,
+// so the only tags this can ever introduce are the literal <strong> ones
+// added below — raw markdown asterisks never reach the page, and summary
+// content can't inject arbitrary HTML.
+function renderBoldMarkdown(text) {
+  return escapeHtml(text || "").replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>");
+}
 
+function renderBulletList(listEl, items) {
+  listEl.innerHTML = "";
+  items.forEach((item) => {
+    const li = document.createElement("li");
+    // li is a flex row (bullet dot + content) — without this wrapper span,
+    // the <strong> label and the trailing text become two *separate* flex
+    // items and each wraps independently in its own narrow column instead
+    // of flowing together as one paragraph.
+    li.innerHTML = `<span>${renderBoldMarkdown(item)}</span>`;
+    listEl.appendChild(li);
+  });
+}
+
+// detected_type is schema-constrained to exactly these four values (see
+// gemini_client.py's DETECTED_TYPES) — mapped to a short label/icon for the
+// badge next to "Summary Analysis".
+const DETECTED_TYPE_BADGES = {
+  "Academic / Lecture": { label: "Academic / Lecture", icon: "graduation-cap" },
+  "Business Meeting": { label: "Business Meeting", icon: "briefcase" },
+  "Technical Sync": { label: "Technical Sync", icon: "terminal" },
+  "General Discussion": { label: "General Discussion", icon: "message-circle" },
+};
+
+// Backend timestamps (sessions.created_at, quota's cooldown_until) are UTC
+// but not every row carries an explicit offset — older rows were written
+// with a bare datetime.now().isoformat() before the backend started using
+// datetime.now(timezone.utc). JS's Date constructor treats an offset-less
+// date-time string as *local* time, not UTC, which silently shows the raw
+// UTC clock numbers mislabeled as the viewer's local time. Appending "Z"
+// whenever no offset is already present makes every timestamp resolve to
+// the correct local time regardless of which format it was stored in.
+function parseUtcTimestamp(raw) {
+  if (!raw) return null;
+  const isoLike = raw.includes(" ") && !raw.includes("T") ? raw.replace(" ", "T") : raw;
+  const hasOffset = /Z$/.test(isoLike) || /[+-]\d{2}:?\d{2}$/.test(isoLike);
+  return new Date(hasOffset ? isoLike : `${isoLike}Z`);
+}
+
+function renderResultMeta(data) {
   const meta = [];
   if (data.input_type) {
     const inputTypeLabels = { audio: "Voice Capture", media: "Imported File" };
     meta.push(inputTypeLabels[data.input_type] || "Pasted Text");
   }
   if (data.created_at) {
-    meta.push(new Date(data.created_at).toLocaleString());
+    meta.push(parseUtcTimestamp(data.created_at).toLocaleString());
   }
   elements.resultMeta.textContent = meta.join(" · ");
+}
 
-  elements.resultDecisions.innerHTML = "";
-  const decisions = Array.isArray(data.decisions) ? data.decisions : [];
-  if (decisions.length === 0) {
-    elements.resultDecisions.innerHTML = "<li>No concrete structural decisions resolved.</li>";
-  } else {
-    decisions.forEach((item) => {
-      const li = document.createElement("li");
-      li.textContent = item;
-      elements.resultDecisions.appendChild(li);
-    });
-  }
-
-  elements.resultActions.innerHTML = "";
-  const actions = Array.isArray(data.action_items) ? data.action_items : [];
-  if (actions.length === 0) {
-    elements.resultActions.innerHTML = "<li>No pending contextual action items.</li>";
-  } else {
-    actions.forEach((item) => {
-      const li = document.createElement("li");
-      li.textContent = item;
-      elements.resultActions.appendChild(li);
-    });
-  }
-
+function renderTranscriptSection(data) {
   if (data.transcript && data.transcript.trim()) {
-    elements.transcriptSection.style.display = "block";
+    elements.transcriptSection.classList.remove("hidden");
     elements.transcriptText.textContent = data.transcript;
     document.getElementById("transcript-toggle").classList.remove("open");
   } else {
-    elements.transcriptSection.style.display = "none";
+    elements.transcriptSection.classList.add("hidden");
   }
+}
+
+// New adaptive schema: detected_type badge, an executive overview under the
+// title, and three bulleted sections — each hidden entirely (not shown with
+// filler text) when its array is empty.
+function renderAdaptiveSummary(data) {
+  elements.resultSummaryCard.classList.add("hidden");
+
+  const badge = DETECTED_TYPE_BADGES[data.detected_type];
+  if (badge) {
+    elements.resultTypeBadge.innerHTML = `<i data-lucide="${badge.icon}"></i>${escapeHtml(badge.label)}`;
+    elements.resultTypeBadge.classList.remove("hidden");
+  } else {
+    elements.resultTypeBadge.classList.add("hidden");
+  }
+
+  elements.resultOverview.textContent = data.overview || "";
+  elements.resultOverview.classList.toggle("hidden", !data.overview);
+
+  const keyConcepts = Array.isArray(data.key_concepts) ? data.key_concepts : [];
+  elements.resultKeyConceptsCard.classList.toggle("hidden", keyConcepts.length === 0);
+  renderBulletList(elements.resultKeyConcepts, keyConcepts);
+
+  elements.resultDecisionsTitle.textContent = "Decisions & Takeaways";
+  const decisions = Array.isArray(data.decisions_and_takeaways) ? data.decisions_and_takeaways : [];
+  const actions = Array.isArray(data.action_items) ? data.action_items : [];
+  elements.resultDecisionsCard.classList.toggle("hidden", decisions.length === 0);
+  elements.resultActionsCard.classList.toggle("hidden", actions.length === 0);
+  // If only one of this pair is visible, let it take the full width rather
+  // than leaving an empty half-column gap next to it.
+  elements.resultDecisionsCard.classList.toggle("result-card--wide", decisions.length > 0 && actions.length === 0);
+  elements.resultActionsCard.classList.toggle("result-card--wide", actions.length > 0 && decisions.length === 0);
+  renderBulletList(elements.resultDecisions, decisions);
+  renderBulletList(elements.resultActions, actions);
+
+  renderLucideIcons();
+}
+
+// Old flat shape (summary paragraph + decisions/action_items lists), for
+// summary records saved before the adaptive schema shipped (no
+// detected_type). Preserves the original filler-text behavior so these
+// records keep looking exactly as they always have.
+function renderLegacySummary(data) {
+  elements.resultTypeBadge.classList.add("hidden");
+  elements.resultOverview.classList.add("hidden");
+  elements.resultKeyConceptsCard.classList.add("hidden");
+
+  elements.resultSummaryCard.classList.remove("hidden");
+  elements.resultsSummary.textContent = data.summary || "No summary available.";
+
+  elements.resultDecisionsTitle.textContent = "Decisions Made";
+  elements.resultDecisionsCard.classList.remove("hidden", "result-card--wide");
+  elements.resultActionsCard.classList.remove("hidden", "result-card--wide");
+
+  const decisions = Array.isArray(data.decisions) ? data.decisions : [];
+  elements.resultDecisions.innerHTML = decisions.length === 0
+    ? "<li>No concrete structural decisions resolved.</li>"
+    : "";
+  decisions.forEach((item) => {
+    const li = document.createElement("li");
+    li.textContent = item;
+    elements.resultDecisions.appendChild(li);
+  });
+
+  const actions = Array.isArray(data.action_items) ? data.action_items : [];
+  elements.resultActions.innerHTML = actions.length === 0
+    ? "<li>No pending contextual action items.</li>"
+    : "";
+  actions.forEach((item) => {
+    const li = document.createElement("li");
+    li.textContent = item;
+    elements.resultActions.appendChild(li);
+  });
+}
+
+function showResults(data) {
+  hideLoading();
+  state.activeSessionId = data.session_id || data.id || null;
+
+  renderResultMeta(data);
+  if (data.detected_type) {
+    renderAdaptiveSummary(data);
+  } else {
+    renderLegacySummary(data);
+  }
+  renderTranscriptSection(data);
 
   elements.inputView.classList.add("hidden");
   elements.homeView.classList.add("hidden");
@@ -621,7 +827,7 @@ function renderSessionList(container, sessions, emptyMessage) {
       .map((session) => {
         const titleBlock = `
             <div class="history-title">${escapeHtml(session.summary || "Untitled summary").substring(0, 55)}${(session.summary || "").length > 55 ? "..." : ""}</div>
-            <div class="history-meta">${new Date(session.created_at).toLocaleDateString()}</div>
+            <div class="history-meta">${parseUtcTimestamp(session.created_at).toLocaleDateString()}</div>
           `;
         if (selectable) {
           const isChecked = state.selectedSessionIds.has(session.id);
@@ -898,6 +1104,12 @@ function toggleBulkFolderMenu(forceOpen) {
   elements.bulkFolderMenu.classList.toggle("hidden", !shouldOpen);
 }
 
+function toggleExportMenu(forceOpen) {
+  if (!elements.exportMenu || !elements.exportTrigger) return;
+  const shouldOpen = typeof forceOpen === "boolean" ? forceOpen : elements.exportMenu.classList.contains("hidden");
+  elements.exportMenu.classList.toggle("hidden", !shouldOpen);
+}
+
 // Called whenever another view (Home/Search/Input/Results) takes over, so a
 // stale "currently open folder" highlight can't linger in the sidebar.
 function clearFolderHighlight() {
@@ -938,6 +1150,129 @@ function setSettingsTab(tab) {
   document.querySelectorAll(".settings-tab-panel").forEach((panel) => {
     panel.classList.toggle("hidden", panel.dataset.settingsPanel !== target);
   });
+  // The rate-limit indicator only lives on the API key tab, and only makes
+  // sense to keep polling while it's actually visible.
+  if (target === "api-key") {
+    startQuotaPolling();
+  } else {
+    stopQuotaPolling();
+  }
+}
+
+const QUOTA_POLL_INTERVAL_MS = 15000;
+const QUOTA_WARNING_THRESHOLD = 0.8;
+
+function formatQuotaCount(value) {
+  if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(value % 1_000_000 === 0 ? 0 : 1)}M`;
+  if (value >= 1000) return `${(value / 1000).toFixed(value % 1000 === 0 ? 0 : 1)}k`;
+  return `${value}`;
+}
+
+function formatQuotaDuration(seconds) {
+  const s = Math.max(0, Math.round(seconds));
+  if (s < 60) return `${s}s`;
+  if (s < 3600) return `${Math.floor(s / 60)}m ${s % 60}s`;
+  return `${Math.floor(s / 3600)}h ${Math.floor((s % 3600) / 60)}m`;
+}
+
+function quotaStatusColor(pct) {
+  if (pct >= 1) return "var(--quota-critical)";
+  if (pct >= QUOTA_WARNING_THRESHOLD) return "var(--quota-warn)";
+  return "var(--quota-ok)";
+}
+
+const QUOTA_DIM_LABELS = { rpm: "Requests / min", tpm: "Tokens / min", rpd: "Requests / day" };
+const QUOTA_RING_CIRCUMFERENCE = 188.5;
+
+function renderQuotaUI(data) {
+  if (!elements.quotaRingFill || !data) return;
+
+  const dims = ["rpm", "tpm", "rpd"].map((key) => {
+    const d = data[key];
+    const pct = d.limit > 0 ? d.used / d.limit : 0;
+    return { key, ...d, pct };
+  });
+  const primary = dims.reduce((worst, d) => (d.pct > worst.pct ? d : worst), dims[0]);
+  const color = quotaStatusColor(primary.pct);
+
+  dims.forEach(({ key, used, limit, pct }) => {
+    const fillEl = document.getElementById(`quota-${key}-fill`);
+    const countEl = document.getElementById(`quota-${key}-count`);
+    const dimEl = document.querySelector(`.quota-dim[data-dim="${key}"]`);
+    if (fillEl) {
+      fillEl.style.width = `${Math.min(pct, 1) * 100}%`;
+      fillEl.style.setProperty("--quota-color", quotaStatusColor(pct));
+    }
+    if (countEl) countEl.textContent = `${formatQuotaCount(used)} / ${formatQuotaCount(limit)}`;
+    if (dimEl) dimEl.classList.toggle("quota-dim--critical", pct >= 1);
+  });
+
+  const ring = elements.quotaRingFill;
+  const clampedPct = Math.min(primary.pct, 1);
+  ring.style.setProperty("--quota-color", color);
+  ring.style.setProperty("--quota-glow", clampedPct >= QUOTA_WARNING_THRESHOLD ? color : "transparent");
+  ring.style.strokeDashoffset = `${QUOTA_RING_CIRCUMFERENCE * (1 - clampedPct)}`;
+  if (elements.quotaRingValue) elements.quotaRingValue.textContent = Math.round(clampedPct * 100);
+
+  if (elements.quotaPrimaryLabel) {
+    const remaining = Math.max(primary.limit - primary.used, 0);
+    const unit = primary.key === "tpm" ? "tokens" : "requests";
+    const window = primary.key === "rpd" ? "today" : "this minute";
+    elements.quotaPrimaryLabel.textContent = `${formatQuotaCount(remaining)} ${unit} left ${window}`;
+  }
+  if (elements.quotaPrimaryCaption) {
+    elements.quotaPrimaryCaption.textContent = primary.pct >= 1
+      ? `At capacity — resets in ${formatQuotaDuration(primary.resets_in_seconds)}`
+      : `${QUOTA_DIM_LABELS[primary.key]} is your tightest limit right now`;
+  }
+  if (elements.quotaTierLabel) {
+    elements.quotaTierLabel.textContent = `${data.tier === "tier_1" ? "Paid" : "Free"} tier`;
+  }
+
+  if (elements.quotaAlert) {
+    const cooldownActive = data.cooldown_until && parseUtcTimestamp(data.cooldown_until) > new Date();
+    if (cooldownActive) {
+      elements.quotaAlert.classList.remove("hidden");
+      elements.quotaAlertText.textContent = `Gemini asked this key to back off. Try again in ${formatQuotaDuration(primary.resets_in_seconds)}.`;
+    } else if (primary.pct >= 1) {
+      elements.quotaAlert.classList.remove("hidden");
+      elements.quotaAlertText.textContent = `You're at capacity on ${QUOTA_DIM_LABELS[primary.key].toLowerCase()}. Resets in ${formatQuotaDuration(primary.resets_in_seconds)}.`;
+    } else if (primary.pct >= QUOTA_WARNING_THRESHOLD) {
+      elements.quotaAlert.classList.remove("hidden");
+      elements.quotaAlertText.textContent = `Getting close to your ${QUOTA_DIM_LABELS[primary.key].toLowerCase()} limit — ${formatQuotaCount(Math.max(primary.limit - primary.used, 0))} left.`;
+    } else {
+      elements.quotaAlert.classList.add("hidden");
+    }
+  }
+
+  renderLucideIcons();
+}
+
+async function fetchQuotaStatus() {
+  try {
+    const res = await fetch("/api/quota", { credentials: "same-origin" });
+    if (!res.ok) return null;
+    const data = await res.json();
+    state.lastQuota = data;
+    renderQuotaUI(data);
+    return data;
+  } catch (error) {
+    console.warn("Unable to load quota status.", error);
+    return null;
+  }
+}
+
+function startQuotaPolling() {
+  stopQuotaPolling();
+  fetchQuotaStatus();
+  state.quotaPollTimer = setInterval(fetchQuotaStatus, QUOTA_POLL_INTERVAL_MS);
+}
+
+function stopQuotaPolling() {
+  if (state.quotaPollTimer) {
+    clearInterval(state.quotaPollTimer);
+    state.quotaPollTimer = null;
+  }
 }
 
 function initializeSettingsTabs() {
@@ -958,6 +1293,7 @@ async function openSettings(tab) {
 }
 
 function closeSettings() {
+  stopQuotaPolling();
   elements.settingsModal.classList.add("hidden");
   if (state.activeSessionId) {
     elements.resultsView.classList.remove("hidden");
@@ -1341,11 +1677,31 @@ function initializeEventListeners() {
     elements.logoutButton.addEventListener("click", logout);
   }
 
-  if (elements.exportButton) {
-    elements.exportButton.addEventListener("click", () => {
-      if (state.activeSessionId) {
-        window.location.href = `/sessions/${state.activeSessionId}/export/text`;
-      }
+  const settingsLogoutButton = document.getElementById("settings-logout-btn");
+  if (settingsLogoutButton) {
+    settingsLogoutButton.addEventListener("click", logout);
+  }
+
+  if (elements.exportTrigger) {
+    elements.exportTrigger.addEventListener("click", (event) => {
+      event.stopPropagation();
+      toggleExportMenu();
+    });
+  }
+  if (elements.exportMenu) {
+    elements.exportMenu.querySelectorAll(".dropdown-option").forEach((item) => {
+      item.addEventListener("click", () => {
+        const format = item.dataset.format;
+        if (state.activeSessionId && format) {
+          // The docx export renders the "Imported File" timestamp
+          // server-side, so the browser's own resolved IANA zone is passed
+          // along — the server otherwise has no way to know the viewer's
+          // local timezone and would fall back to UTC.
+          const tzParam = format === "docx" ? `?tz=${encodeURIComponent(Intl.DateTimeFormat().resolvedOptions().timeZone)}` : "";
+          window.location.href = `/sessions/${state.activeSessionId}/export/${format}${tzParam}`;
+        }
+        toggleExportMenu(false);
+      });
     });
   }
 
@@ -1425,6 +1781,9 @@ function initializeEventListeners() {
   document.addEventListener("click", (event) => {
     if (elements.bulkFolderWrap && !elements.bulkFolderWrap.contains(event.target)) {
       toggleBulkFolderMenu(false);
+    }
+    if (elements.exportWrap && !elements.exportWrap.contains(event.target)) {
+      toggleExportMenu(false);
     }
   });
 }
