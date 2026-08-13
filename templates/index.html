@@ -16,7 +16,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Lora:ital,wght@1,500;1,600&display=swap" />
-  <link rel="stylesheet" href="/static/css/main.css?v=8" />
+  <link rel="stylesheet" href="/static/css/main.css?v=9" />
   <link rel="stylesheet" href="/static/css/workspace.css?v=3" />
   <script src="https://unpkg.com/lucide@latest"></script>
 </head>
@@ -109,9 +109,31 @@
   </div>
 
   <div class="loading-overlay hidden" id="loading">
-    <div class="loading-panel">
-      <div class="spinner"></div>
-      <p class="loading-msg" id="loading-msg">Sending to Gemini Engine...</p>
+    <div class="loading-panel loading-panel--rich">
+      <div class="think-card" aria-hidden="true">
+        <div class="think-lines">
+          <span class="tl" style="--w:88%"></span>
+          <span class="tl" style="--w:62%"></span>
+          <span class="tl" style="--w:74%"></span>
+          <span class="tl" style="--w:50%"></span>
+        </div>
+        <div class="think-chevron"></div>
+        <div class="think-summary">
+          <span class="ts" style="--w:70%"></span>
+          <span class="ts" style="--w:55%"></span>
+          <span class="ts" style="--w:40%"></span>
+        </div>
+      </div>
+
+      <p class="loading-msg" id="loading-msg">Reading your transcript…</p>
+      <p class="loading-context" id="loading-context">Usually just a few seconds.</p>
+
+      <div class="loading-progress">
+        <div class="loading-progress-track">
+          <div class="loading-progress-fill" id="loading-progress-fill"></div>
+        </div>
+        <span class="loading-progress-pct" id="loading-progress-pct">0%</span>
+      </div>
     </div>
   </div>
 
@@ -119,7 +141,7 @@
   {% include "create-folder-modal.html" %}
   {% include "delete-account-modal.html" %}
 
-  <script src="/static/app.js?v=13" defer></script>
+  <script src="/static/app.js?v=14" defer></script>
   <script type="module" src="/static/settings.js?v=5"></script>
   <script>lucide.createIcons();</script>
 </body>

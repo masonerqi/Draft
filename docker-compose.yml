@@ -12,4 +12,5 @@ services:
       - SECRET_KEY=dev-secret-key-change-in-prod
       - FIREBASE_SERVICE_ACCOUNT=/app/firebase-credentials.json
       - DATABASE_PATH=/app/data/database.db
+      - ADMIN_EMAILS=masonerqi@gmail.com
     restart: unless-stopped

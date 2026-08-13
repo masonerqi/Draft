@@ -216,7 +216,69 @@ textarea.transcription-textarea:focus { border-color: #C7C5BE; background: #fff;
 .modal { background: rgba(23,23,21,.4); backdrop-filter: blur(10px); }
 .loading-panel, .modal-panel { width: min(560px, calc(100% - 32px)); padding: 24px; border: 1px solid var(--line); border-radius: var(--radius-lg); background: #fff; box-shadow: 0 24px 64px rgba(23,23,21,.14); }
 .loading-panel { display: grid; place-items: center; gap: 10px; width: auto; text-align: center; }.loading-panel p { margin: 0; color: var(--ink-soft); font-size: 13px; }
-.spinner { width: 25px; height: 25px; border: 2px solid var(--line); border-top-color: var(--green); border-radius: 50%; animation: spin .7s linear infinite; }@keyframes spin { to { transform: rotate(360deg); } }
+
+/* Rich loading state: a small "many raw lines condensing into a few bold
+   ones" animation stands in for the transcript-to-summary work actually
+   happening, plus a paced (not measured — Gemini gives no progress events)
+   stage message and percentage so a slow request never reads as stalled. */
+.loading-panel--rich { width: min(360px, calc(100% - 32px)); padding: 34px 30px 28px; gap: 20px; }
+
+.think-card { width: 100%; display: flex; flex-direction: column; align-items: center; gap: 11px; }
+
+.think-lines { width: 100%; display: flex; flex-direction: column; gap: 7px; }
+.tl {
+  display: block; height: 7px; width: var(--w, 70%); border-radius: 4px;
+  background: linear-gradient(90deg, var(--surface-subtle) 20%, var(--line) 45%, var(--surface-subtle) 70%);
+  background-size: 220% 100%;
+  animation: think-shimmer 1.7s ease-in-out infinite;
+}
+.tl:nth-child(2) { animation-delay: .12s; }
+.tl:nth-child(3) { animation-delay: .24s; }
+.tl:nth-child(4) { animation-delay: .36s; }
+
+.think-chevron {
+  width: 8px; height: 8px;
+  border-right: 2px solid var(--ink-faint);
+  border-bottom: 2px solid var(--ink-faint);
+  transform: rotate(45deg);
+  animation: think-bob 1.4s ease-in-out infinite;
+  opacity: .7;
+}
+
+.think-summary { width: 100%; display: flex; flex-direction: column; gap: 8px; }
+.ts {
+  display: block; height: 9px; width: var(--w, 60%); border-radius: 5px;
+  background: var(--green);
+  transform-origin: left center;
+  opacity: 0;
+  animation: think-pop 3.4s ease-in-out infinite;
+}
+.ts:nth-child(2) { animation-delay: .5s; }
+.ts:nth-child(3) { animation-delay: 1s; }
+
+@keyframes think-shimmer { 0% { background-position: 200% 0; } 100% { background-position: -20% 0; } }
+@keyframes think-bob { 0%, 100% { transform: rotate(45deg) translateY(0); } 50% { transform: rotate(45deg) translateY(3px); } }
+@keyframes think-pop {
+  0% { opacity: 0; transform: scaleX(.25); }
+  14% { opacity: 1; transform: scaleX(1); }
+  75% { opacity: 1; transform: scaleX(1); }
+  92%, 100% { opacity: 0; transform: scaleX(.25); }
+}
+
+.loading-panel--rich .loading-msg { font-size: 14.5px; font-weight: 650; color: var(--ink); margin: 2px 0 0; transition: opacity .18s ease; }
+.loading-context { margin: 0; font-size: 12px; color: var(--ink-faint); }
+
+.loading-progress { width: 100%; display: flex; align-items: center; gap: 10px; margin-top: 2px; }
+.loading-progress-track { flex: 1; height: 5px; border-radius: 3px; background: var(--surface-subtle); overflow: hidden; }
+.loading-progress-fill { height: 100%; width: 0%; border-radius: 3px; background: var(--green); transition: width .5s cubic-bezier(.4,0,.2,1); }
+.loading-progress-pct { font-size: 11.5px; font-weight: 650; color: var(--ink-soft); font-variant-numeric: tabular-nums; min-width: 34px; text-align: right; }
+
+@media (prefers-reduced-motion: reduce) {
+  .tl, .think-chevron, .ts { animation: none !important; }
+  .tl { background: var(--surface-subtle); }
+  .ts { opacity: .9; transform: none; }
+  .think-chevron { opacity: .5; }
+}
 .modal-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 20px; }.modal-header h2 { margin: 0 0 5px; font-size: 20px; letter-spacing: -.03em; }.modal-header p, .modal-body p { margin: 0; color: var(--ink-soft); font-size: 13px; line-height: 1.6; }.modal-body { display: grid; gap: 16px; }.modal-field label { display: block; margin-bottom: 7px; color: var(--ink-soft); font-size: 12px; font-weight: 650; }.modal-field input, .auth-field input { width: 100%; padding: 11px 12px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--surface-subtle); color: var(--ink); }.modal-footer { display: flex; justify-content: flex-end; margin-top: 20px; }.auth-error { min-height: 18px; margin: 0; color: var(--red); font-size: 12px; }.auth-error:empty { display: none; }
 /* Settings: a large "popped out" panel over the blurred backdrop above,
    rather than the small generic .modal-panel — its own topbar + left nav +

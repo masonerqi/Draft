@@ -698,6 +698,42 @@ def relax_quota_limit(user_id, dimension, new_limit):
     conn.close()
 
 
+def get_all_quota_limits():
+    """Admin view: every user alongside their tracked quota limits. Uses a
+    LEFT JOIN because quota_limits rows are only seeded lazily on a user's
+    first summarise request — a user who has never triggered one yet still
+    shows up here, with every quota field as None."""
+    conn = get_db_connection()
+    rows = conn.execute("""
+        SELECT u.id AS user_id, u.username, u.name,
+               q.tier, q.rpm_limit, q.tpm_limit, q.rpd_limit, q.cooldown_until,
+               q.rpm_limit_corrected_at, q.tpm_limit_corrected_at, q.rpd_limit_corrected_at,
+               q.updated_at
+        FROM users u
+        LEFT JOIN quota_limits q ON q.user_id = u.id
+        ORDER BY u.id
+    """).fetchall()
+    conn.close()
+    return [dict(row) for row in rows]
+
+
+def set_quota_tier(user_id, tier):
+    """Updates only the display label on a user's quota row. Enforcement
+    (check_capacity/compute_quota_status in quota.py) reads the numeric
+    rpm/tpm/rpd_limit columns directly and never re-derives them from this
+    column, so changing it alone does not change what a user can do —
+    rpm_limit/tpm_limit/rpd_limit must be set explicitly to actually raise
+    or lower their capacity."""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute(
+        "UPDATE quota_limits SET tier = ?, updated_at = ? WHERE user_id = ?",
+        (tier, _utcnow_iso(), user_id)
+    )
+    conn.commit()
+    conn.close()
+
+
 def start_usage_log_cleanup_thread(interval_seconds=3600):
     """Runs cleanup_old_usage_logs on a fixed interval in a daemon thread, so
     usage_logs (written on every summarise request) doesn't grow unbounded.

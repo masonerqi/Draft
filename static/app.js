@@ -55,7 +55,11 @@ const elements = {
   quotaTierLabel: document.getElementById("quota-tier-label"),
   loadingOverlay: document.getElementById("loading"),
   loadingMsg: document.getElementById("loading-msg"),
+  loadingContext: document.getElementById("loading-context"),
+  loadingProgressFill: document.getElementById("loading-progress-fill"),
+  loadingProgressPct: document.getElementById("loading-progress-pct"),
   errorBanner: document.getElementById("error-banner"),
+  inputErrorBanner: document.getElementById("input-error-banner"),
   resultsSummary: document.getElementById("result-summary"),
   resultSummaryCard: document.getElementById("result-summary-card"),
   resultMeta: document.getElementById("result-meta"),
@@ -488,7 +492,21 @@ async function submitTranscript() {
   const formData = new FormData();
   formData.append("transcript", text);
   formData.append("source_hint", state.lastInputWasAudio ? "voice" : "manual");
-  await submitToAPI(formData, "Sending content to Gemini Engine...");
+  await submitToAPI(formData, "text", estimateTextProcessingSeconds(text));
+}
+
+// Rough pacing hints for the loading animation, not a real prediction — a
+// longer transcript genuinely tends to take Gemini a bit longer, so the
+// progress bar ramps proportionally instead of using one fixed duration for
+// every submission.
+function estimateTextProcessingSeconds(text) {
+  return Math.min(18, Math.max(5, text.length / 350));
+}
+
+function estimateMediaProcessingSeconds(file, durationSeconds) {
+  const uploadEstimate = file.size / (1.5 * 1024 * 1024); // ~1.5MB/s, conservative
+  const processEstimate = durationSeconds ? Math.max(10, durationSeconds * 0.15) : 22;
+  return Math.min(150, Math.max(10, uploadEstimate + processEstimate));
 }
 
 // Matches app.py's MAX_CONTENT_LENGTH — checked client-side too so an
@@ -520,11 +538,10 @@ function getAudioDurationSeconds(file) {
   });
 }
 
-async function warnIfAudioExceedsQuota(file) {
-  const duration = await getAudioDurationSeconds(file);
+async function warnIfAudioExceedsQuota(file, duration) {
   // Browser couldn't read the header (unsupported/corrupt file) — let the
   // server's own pre-flight check be the judge instead of blocking here.
-  if (duration === null) return true;
+  if (duration === null || duration === undefined) return true;
 
   const quotaData = state.lastQuota || (await fetchQuotaStatus());
   if (!quotaData) return true;
@@ -551,7 +568,8 @@ async function handleFileUpload(event) {
     return;
   }
 
-  if (!(await warnIfAudioExceedsQuota(file))) return;
+  const duration = await getAudioDurationSeconds(file);
+  if (!(await warnIfAudioExceedsQuota(file, duration))) return;
 
   stopRecordingIfActive();
   state.activeSessionId = null;
@@ -559,12 +577,13 @@ async function handleFileUpload(event) {
 
   const formData = new FormData();
   formData.append("media", file);
-  await submitToAPI(formData, "Uploading and analyzing your file...");
+  await submitToAPI(formData, "media", estimateMediaProcessingSeconds(file, duration));
 }
 
-async function submitToAPI(formData, msg) {
-  showLoading(msg);
+async function submitToAPI(formData, kind, estimatedSeconds) {
+  showLoading(kind, estimatedSeconds);
   hideError();
+  hideInputError();
   try {
     const res = await fetch("/summarise", {
       method: "POST",
@@ -593,7 +612,7 @@ async function submitToAPI(formData, msg) {
         const resetText = typeof resetSeconds === "number" ? ` Try again in ${formatQuotaDuration(resetSeconds)}.` : "";
         hideLoading();
         showInput();
-        showError(`${errorMessage}${resetText}`);
+        showInputError(`${errorMessage}${resetText}`);
         fetchQuotaStatus();
         return;
       }
@@ -756,7 +775,7 @@ function renderLegacySummary(data) {
 }
 
 function showResults(data) {
-  hideLoading();
+  completeLoading();
   state.activeSessionId = data.session_id || data.id || null;
 
   renderResultMeta(data);
@@ -796,6 +815,21 @@ function showError(message) {
 
 function hideError() {
   elements.errorBanner.style.display = "none";
+}
+
+// A /summarise submission (rate limit, transient failure, ...) always starts
+// from the input view, so its error belongs there — not on the results
+// panel, which forcing open would surface whatever note was last viewed
+// (stale content) underneath the banner instead of the form the user is
+// actually looking at.
+function showInputError(message) {
+  hideError();
+  elements.inputErrorBanner.textContent = message;
+  elements.inputErrorBanner.style.display = "block";
+}
+
+function hideInputError() {
+  elements.inputErrorBanner.style.display = "none";
 }
 
 async function loadHistory() {
@@ -1414,13 +1448,107 @@ async function saveApiKey() {
   }
 }
 
-function showLoading(msg) {
-  elements.loadingOverlay.classList.remove("hidden");
-  elements.loadingMsg.textContent = msg;
+// Gemini gives no real progress events, so this is a paced, honest-feeling
+// simulation, not a measurement: it eases toward ~92% over `estimatedSeconds`
+// (derived from transcript length or file size/duration — see
+// estimateTextProcessingSeconds/estimateMediaProcessingSeconds), then creeps
+// slowly so a slower-than-expected request never looks stalled, and only
+// ever reaches 100% via completeLoading() once the real response lands.
+const LOADING_STAGES = {
+  text: [
+    { at: 0, msg: "Reading your transcript…" },
+    { at: 25, msg: "Finding the key points…" },
+    { at: 55, msg: "Drafting the summary…" },
+    { at: 80, msg: "Polishing decisions & action items…" },
+  ],
+  media: [
+    { at: 0, msg: "Uploading your recording…" },
+    { at: 30, msg: "Gemini is transcribing the audio…" },
+    { at: 62, msg: "Finding the key points…" },
+    { at: 84, msg: "Drafting the summary…" },
+  ],
+};
+
+let loadingTimer = null;
+
+function setLoadingMessage(msg) {
+  const el = elements.loadingMsg;
+  if (el.textContent === msg) return;
+  el.style.opacity = "0";
+  setTimeout(() => {
+    el.textContent = msg;
+    el.style.opacity = "1";
+  }, 180);
 }
 
+function setLoadingProgress(pct) {
+  const clamped = Math.max(0, Math.min(100, pct));
+  elements.loadingProgressFill.style.width = `${clamped}%`;
+  elements.loadingProgressPct.textContent = `${Math.round(clamped)}%`;
+}
+
+function showLoading(kind, estimatedSeconds) {
+  elements.loadingOverlay.classList.remove("hidden");
+  stopLoadingTimer();
+
+  const stages = LOADING_STAGES[kind] || LOADING_STAGES.text;
+  const totalMs = Math.max(1, estimatedSeconds || 8) * 1000;
+  const startedAt = performance.now();
+  let currentStageIndex = -1;
+
+  setLoadingProgress(0);
+  setLoadingMessage(stages[0].msg);
+  elements.loadingContext.textContent = kind === "media"
+    ? "Longer recordings can take a minute or two."
+    : "Usually just a few seconds.";
+
+  loadingTimer = setInterval(() => {
+    const elapsed = performance.now() - startedAt;
+    let pct;
+    if (elapsed < totalMs) {
+      const t = elapsed / totalMs;
+      pct = 92 * (1 - Math.pow(1 - t, 3)); // ease-out cubic, fast then slow
+    } else {
+      const overtimeMinutes = (elapsed - totalMs) / 60000;
+      pct = Math.min(97, 92 + overtimeMinutes * 3);
+      if (elapsed > totalMs + 25000) {
+        elements.loadingContext.textContent = "Still working — this one's taking a little longer than usual.";
+      }
+    }
+    setLoadingProgress(pct);
+
+    const stageIdx = stages.reduce((acc, s, i) => (pct >= s.at ? i : acc), 0);
+    if (stageIdx !== currentStageIndex) {
+      currentStageIndex = stageIdx;
+      setLoadingMessage(stages[stageIdx].msg);
+    }
+  }, 250);
+}
+
+function stopLoadingTimer() {
+  if (loadingTimer) {
+    clearInterval(loadingTimer);
+    loadingTimer = null;
+  }
+}
+
+// Used on failure/abort paths — disappears immediately, no fake completion.
 function hideLoading() {
+  stopLoadingTimer();
   elements.loadingOverlay.classList.add("hidden");
+}
+
+// Used only once the real response has actually arrived — fills the bar to
+// 100% and holds it just long enough to read before the overlay clears, so
+// success feels like a landing rather than an abrupt cut.
+function completeLoading() {
+  if (!loadingTimer && elements.loadingOverlay.classList.contains("hidden")) return;
+  stopLoadingTimer();
+  setLoadingProgress(100);
+  setLoadingMessage("Done.");
+  setTimeout(() => {
+    elements.loadingOverlay.classList.add("hidden");
+  }, 320);
 }
 
 function showInput() {
@@ -1485,6 +1613,7 @@ function resetToInput() {
   state.activeSessionId = null;
   state.liveTranscript = "";
   hideError();
+  hideInputError();
   elements.resultsView.classList.add("hidden");
   elements.homeView.classList.add("hidden");
   elements.homeTopbar.classList.add("hidden");
@@ -1518,6 +1647,7 @@ function clearInput() {
     audioInput.value = "";
   }
   hideError();
+  hideInputError();
 }
 
 function escapeHtml(str) {
