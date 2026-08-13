@@ -8,12 +8,54 @@ from datetime import datetime, timedelta, timezone
 import psycopg2
 import psycopg2.errors
 import psycopg2.extras
+import psycopg2.pool
 from werkzeug.security import generate_password_hash, check_password_hash
 
 # Vercel's Postgres integrations (and most hosted providers) commonly expose
 # either name depending on how the database was provisioned/connected, so
 # both are accepted rather than forcing one convention.
 DATABASE_URL = os.environ.get("DATABASE_URL") or os.environ.get("POSTGRES_URL")
+
+_pool = None
+_pool_lock = threading.Lock()
+
+
+def _get_pool():
+    """Lazily creates the process-wide connection pool on first use. Opening
+    a fresh TCP+TLS+auth connection to a remote Postgres host on every query
+    (the previous behavior) added seconds of latency per request; a pool
+    pays that cost only when it needs to grow, and reuses connections for
+    every request after that."""
+    global _pool
+    if _pool is None:
+        with _pool_lock:
+            if _pool is None:
+                if not DATABASE_URL:
+                    raise RuntimeError(
+                        "DATABASE_URL (or POSTGRES_URL) must be set to a Postgres connection string."
+                    )
+                _pool = psycopg2.pool.ThreadedConnectionPool(1, 10, DATABASE_URL)
+    return _pool
+
+
+class _PooledConnection:
+    """Transparent proxy around a pooled connection. Every call site in this
+    module already calls `conn.close()` when it's done; rather than rewrite
+    every one of them to return the connection explicitly, this makes that
+    existing `close()` call return the connection to the pool instead of
+    tearing down the socket. psycopg2's pool rolls back any uncommitted
+    transaction on the connection before reusing it, so a caller that closes
+    without committing still leaves the next borrower a clean connection."""
+
+    def __init__(self, pool, conn):
+        self._pool = pool
+        self._conn = conn
+
+    def __getattr__(self, name):
+        return getattr(self._conn, name)
+
+    def close(self):
+        self._pool.putconn(self._conn)
 
 
 def hash_api_key(api_key):
@@ -28,14 +70,12 @@ def hash_api_key(api_key):
 
 
 def get_db_connection():
-    """Opens a connection to the Postgres database. A single hosted database
-    (not a local file) is required so every app instance — Vercel can route
-    requests to different, independent instances — sees the same data."""
-    if not DATABASE_URL:
-        raise RuntimeError(
-            "DATABASE_URL (or POSTGRES_URL) must be set to a Postgres connection string."
-        )
-    return psycopg2.connect(DATABASE_URL)
+    """Borrows a connection to the Postgres database from the process-wide
+    pool (created on first call). A single hosted database (not a local
+    file) is required so every app instance — Vercel can route requests to
+    different, independent instances — sees the same data."""
+    pool = _get_pool()
+    return _PooledConnection(pool, pool.getconn())
 
 
 def init_db():
