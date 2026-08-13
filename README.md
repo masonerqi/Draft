@@ -26,13 +26,22 @@ You'll know it's active when your shell prompt is prefixed with `(venv)`.
 pip install -r requirements.txt
 ```
 
-### 3. Configure environment variables
+### 3. Start a Postgres database
+
+The app stores all data (accounts, sessions, quota history) in Postgres — there's no local-file fallback. For local dev, the quickest option is a disposable container:
+
+```bash
+docker run -d --name draft-app-db -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=draft_app -p 5432:5432 postgres:16-alpine
+```
+
+### 4. Configure environment variables
 
 Create a `.env` file in the project root:
 
 ```bash
 SECRET_KEY=your-secret-key
 ADMIN_EMAILS=you@example.com
+DATABASE_URL=postgresql://postgres:postgres@localhost:5432/draft_app
 ```
 
 Optional, if using Firebase:
@@ -42,7 +51,7 @@ FIREBASE_SERVICE_ACCOUNT=path/to/firebase-credentials.json
 FIREBASE_PROJECT_ID=your-firebase-project-id
 ```
 
-### 4. Run the app
+### 5. Run the app
 
 ```bash
 python app.py
@@ -70,7 +79,7 @@ Set these environment variables in the Vercel project settings:
 | `ADMIN_EMAILS` | Yes | Comma-separated list of admin emails. |
 | `FIREBASE_PROJECT_ID` | Yes (for login) | Your Firebase project id. |
 | `FIREBASE_SERVICE_ACCOUNT_JSON` | Yes (for login) | The full contents of your Firebase service account JSON, pasted as-is. Used instead of a file path since `firebase-credentials.json` is gitignored and never reaches the built image. |
-| `DATABASE_PATH` | No | Defaults to `data/database.db` inside the container. |
+| `DATABASE_URL` | Yes | Connection string for a hosted Postgres database (e.g. Vercel Postgres/Neon, Supabase). `POSTGRES_URL` is also accepted, since that's the name some Postgres integrations set automatically. |
 | `PORT` | No | Vercel injects this; the app binds to it automatically. |
 
-**Known limitation:** the app stores data in a local SQLite file. Vercel's container filesystem is ephemeral, so data written at runtime (accounts, quota history, saved summaries) will not survive a redeploy or restart. This is fine for a demo/preview deploy; if you need durable storage, move to a hosted database (e.g. Postgres) before relying on this in production.
+**Why Postgres, not SQLite:** Vercel's container filesystem is ephemeral and Vercel can route requests to different instances of the same deployment, each with its own independent disk. A local SQLite file previously caused accounts to randomly "disappear" mid-session — a signup or login on one instance wasn't visible to the next request if it landed on another. A shared, hosted Postgres database fixes this since every instance reads and writes the same data.

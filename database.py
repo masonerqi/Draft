@@ -1,19 +1,19 @@
 import hashlib
-import os
-import sqlite3
 import json
+import os
 import threading
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+
+import psycopg2
+import psycopg2.errors
+import psycopg2.extras
 from werkzeug.security import generate_password_hash, check_password_hash
 
-DB_PATH = os.environ.get("DATABASE_PATH")
-if not DB_PATH:
-    # Anchored to this file's own directory rather than the process's cwd —
-    # cwd varies depending on how/where the server is launched (terminal,
-    # IDE run config, debugger), which previously made the resolved DB file
-    # inconsistent across runs and made data look like it was disappearing.
-    DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "database.db")
+# Vercel's Postgres integrations (and most hosted providers) commonly expose
+# either name depending on how the database was provisioned/connected, so
+# both are accepted rather than forcing one convention.
+DATABASE_URL = os.environ.get("DATABASE_URL") or os.environ.get("POSTGRES_URL")
 
 
 def hash_api_key(api_key):
@@ -28,65 +28,59 @@ def hash_api_key(api_key):
 
 
 def get_db_connection():
-    """Helper function to establish a database connection with dictionary-like row access."""
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    return conn
+    """Opens a connection to the Postgres database. A single hosted database
+    (not a local file) is required so every app instance — Vercel can route
+    requests to different, independent instances — sees the same data."""
+    if not DATABASE_URL:
+        raise RuntimeError(
+            "DATABASE_URL (or POSTGRES_URL) must be set to a Postgres connection string."
+        )
+    return psycopg2.connect(DATABASE_URL)
 
 
 def init_db():
-    db_dir = os.path.dirname(DB_PATH)
-    if db_dir and not os.path.exists(db_dir):
-        os.makedirs(db_dir, exist_ok=True)
-        
-    conn = sqlite3.connect(DB_PATH)
+    conn = get_db_connection()
     cursor = conn.cursor()
-
-    # WAL lets the rolling-window quota reads (fired on every summarise
-    # request) proceed concurrently with the writes that log each request's
-    # outcome, instead of blocking each other under SQLite's default
-    # rollback-journal locking.
-    cursor.execute("PRAGMA journal_mode=WAL")
 
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS users (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id SERIAL PRIMARY KEY,
             username TEXT UNIQUE NOT NULL,
             password_hash TEXT NOT NULL,
             name TEXT,
             gemini_api_key TEXT,
             firebase_uid TEXT UNIQUE,
-            created_at DATETIME NOT NULL
+            summary_language TEXT,
+            created_at TEXT NOT NULL
         )
     """)
-    
+
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS sessions (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            created_at DATETIME,
+            id SERIAL PRIMARY KEY,
+            created_at TEXT,
             input_type TEXT,
             filename TEXT,
             transcript TEXT,
             summary TEXT,
             decisions TEXT,
             action_items TEXT,
-            user_id INTEGER,
-            FOREIGN KEY(user_id) REFERENCES users(id)
+            user_id INTEGER REFERENCES users(id),
+            folder_id INTEGER,
+            detected_type TEXT,
+            key_concepts TEXT
         )
     """)
-    conn.commit()
 
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS folders (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id INTEGER NOT NULL,
+            id SERIAL PRIMARY KEY,
+            user_id INTEGER NOT NULL REFERENCES users(id),
             name TEXT NOT NULL,
             icon TEXT NOT NULL,
-            created_at DATETIME NOT NULL,
-            FOREIGN KEY(user_id) REFERENCES users(id)
+            created_at TEXT NOT NULL
         )
     """)
-    conn.commit()
 
     # Single source of truth for Gemini rate-limit tracking. Every summarise
     # request writes exactly one row here once it's known whether Gemini was
@@ -96,18 +90,16 @@ def init_db():
     # so there's never a second place for usage state to drift out of sync.
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS usage_logs (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id INTEGER NOT NULL,
+            id SERIAL PRIMARY KEY,
+            user_id INTEGER NOT NULL REFERENCES users(id),
             key_hash TEXT,
             timestamp TEXT NOT NULL,
             request_type TEXT NOT NULL,
             estimated_tokens INTEGER,
             actual_tokens INTEGER,
-            status TEXT NOT NULL,
-            FOREIGN KEY(user_id) REFERENCES users(id)
+            status TEXT NOT NULL
         )
     """)
-    conn.commit()
 
     # Per-key/tier quota assumptions, seeded from Google's published defaults
     # the first time a given API key is checked (see quota.py) and editable
@@ -124,7 +116,7 @@ def init_db():
     # history instead of resetting it or inheriting another key's cooldown.
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS quota_limits (
-            user_id INTEGER NOT NULL,
+            user_id INTEGER NOT NULL REFERENCES users(id),
             key_hash TEXT NOT NULL,
             tier TEXT NOT NULL DEFAULT 'free',
             rpm_limit INTEGER NOT NULL,
@@ -135,159 +127,17 @@ def init_db():
             rpm_limit_corrected_at TEXT,
             tpm_limit_corrected_at TEXT,
             rpd_limit_corrected_at TEXT,
-            PRIMARY KEY (user_id, key_hash),
-            FOREIGN KEY(user_id) REFERENCES users(id)
+            PRIMARY KEY (user_id, key_hash)
         )
     """)
-    conn.commit()
 
-    # Migration checks for existing databases
-    cursor.execute("PRAGMA table_info(users)")
-    user_columns = [row[1] for row in cursor.fetchall()]
-    if "gemini_api_key" not in user_columns:
-        cursor.execute("ALTER TABLE users ADD COLUMN gemini_api_key TEXT")
-        conn.commit()
-    if "firebase_uid" not in user_columns:
-        cursor.execute("ALTER TABLE users ADD COLUMN firebase_uid TEXT")
-        conn.commit()
-    if "name" not in user_columns:
-        cursor.execute("ALTER TABLE users ADD COLUMN name TEXT")
-        conn.commit()
-    if "summary_language" not in user_columns:
-        cursor.execute("ALTER TABLE users ADD COLUMN summary_language TEXT")
-        conn.commit()
-
-    cursor.execute("PRAGMA table_info(sessions)")
-    columns = [row[1] for row in cursor.fetchall()]
-    if "transcript" not in columns:
-        cursor.execute("ALTER TABLE sessions ADD COLUMN transcript TEXT")
-        conn.commit()
-    if "user_id" not in columns:
-        cursor.execute("ALTER TABLE sessions ADD COLUMN user_id INTEGER")
-        conn.commit()
-    if "folder_id" not in columns:
-        cursor.execute("ALTER TABLE sessions ADD COLUMN folder_id INTEGER")
-        conn.commit()
-    # Added for the adaptive summary schema (detected content type + a
-    # separate key_concepts list alongside decisions/action_items). NULL on
-    # every pre-existing row, which is exactly the signal the render layer
-    # uses to fall back to the old flat layout for those records.
-    if "detected_type" not in columns:
-        cursor.execute("ALTER TABLE sessions ADD COLUMN detected_type TEXT")
-        conn.commit()
-    if "key_concepts" not in columns:
-        cursor.execute("ALTER TABLE sessions ADD COLUMN key_concepts TEXT")
-        conn.commit()
-
-    # Added so maybe_relax_limit (see quota.py) can tell how long a tracked
-    # limit has been sitting at a downward correction, per-dimension — a
-    # single shared timestamp would conflate "RPM was corrected recently"
-    # with "RPD was corrected recently" for the same user.
-    cursor.execute("PRAGMA table_info(quota_limits)")
-    quota_table_info = cursor.fetchall()
-    quota_columns = [row[1] for row in quota_table_info]
-    # PRAGMA table_info's last field is the column's 1-based position in the
-    # primary key (0 = not part of it).
-    quota_pk_columns = {row[1] for row in quota_table_info if row[5]}
-    for corrected_at_column in ("rpm_limit_corrected_at", "tpm_limit_corrected_at", "rpd_limit_corrected_at"):
-        if corrected_at_column not in quota_columns:
-            cursor.execute(f"ALTER TABLE quota_limits ADD COLUMN {corrected_at_column} TEXT")
-            conn.commit()
-
-    # Attribute historical usage to whichever key each user currently holds.
-    # The key actually in use at the time wasn't recorded before this column
-    # existed, so the current key is the best available guess — and the
-    # conservative one: leaving these NULL would instead make every user's
-    # rolling window look empty, handing out a fresh budget that Google's
-    # side would not honour.
-    cursor.execute("PRAGMA table_info(usage_logs)")
-    usage_columns = [row[1] for row in cursor.fetchall()]
-    if "key_hash" not in usage_columns:
-        cursor.execute("ALTER TABLE usage_logs ADD COLUMN key_hash TEXT")
-        conn.commit()
-        cursor.execute("SELECT id, gemini_api_key FROM users WHERE gemini_api_key IS NOT NULL AND gemini_api_key != ''")
-        for migrating_user_id, api_key in cursor.fetchall():
-            cursor.execute(
-                "UPDATE usage_logs SET key_hash = ? WHERE user_id = ? AND key_hash IS NULL",
-                (hash_api_key(api_key), migrating_user_id)
-            )
-        conn.commit()
-
-    # Rebuild quota_limits from a user_id-keyed shape to the
-    # (user_id, key_hash) one. SQLite can't alter a primary key in place, so
-    # this is the standard create/copy/drop/rename.
-    #
-    # Keyed off the actual primary key rather than the mere presence of a
-    # key_hash column: a database may already carry key_hash while still
-    # being keyed by user_id alone, and that shape is the broken one — it
-    # allows only a single row per user, so a second API key fails on the
-    # primary key constraint.
-    #
-    # Each row needs a key to belong to. An existing key_hash is authoritative
-    # if present; otherwise the user's current key is the best available
-    # guess, for the same reason as the usage_logs backfill above. A row with
-    # neither is dropped, since there's no key for its cooldown/corrections to
-    # meaningfully describe (a fresh row reseeds from tier defaults as soon as
-    # one is saved).
-    if quota_pk_columns != {"user_id", "key_hash"}:
-        existing_key_hash = "q.key_hash" if "key_hash" in quota_columns else "NULL"
-        cursor.execute(f"""
-            SELECT q.user_id, {existing_key_hash}, u.gemini_api_key, q.tier,
-                   q.rpm_limit, q.tpm_limit, q.rpd_limit,
-                   q.cooldown_until, q.updated_at,
-                   q.rpm_limit_corrected_at, q.tpm_limit_corrected_at, q.rpd_limit_corrected_at
-            FROM quota_limits q
-            JOIN users u ON u.id = q.user_id
-        """)
-        migrated_rows = []
-        for migrating_user_id, row_key_hash, api_key, *rest in cursor.fetchall():
-            resolved_key_hash = row_key_hash or (hash_api_key(api_key) if api_key else None)
-            if not resolved_key_hash:
-                continue
-            migrated_rows.append((migrating_user_id, resolved_key_hash, *rest))
-
-        cursor.execute("""
-            CREATE TABLE quota_limits_migrated (
-                user_id INTEGER NOT NULL,
-                key_hash TEXT NOT NULL,
-                tier TEXT NOT NULL DEFAULT 'free',
-                rpm_limit INTEGER NOT NULL,
-                tpm_limit INTEGER NOT NULL,
-                rpd_limit INTEGER NOT NULL,
-                cooldown_until TEXT,
-                updated_at TEXT NOT NULL,
-                rpm_limit_corrected_at TEXT,
-                tpm_limit_corrected_at TEXT,
-                rpd_limit_corrected_at TEXT,
-                PRIMARY KEY (user_id, key_hash),
-                FOREIGN KEY(user_id) REFERENCES users(id)
-            )
-        """)
-        cursor.executemany("""
-            INSERT INTO quota_limits_migrated
-                (user_id, key_hash, tier, rpm_limit, tpm_limit, rpd_limit, cooldown_until, updated_at,
-                 rpm_limit_corrected_at, tpm_limit_corrected_at, rpd_limit_corrected_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, migrated_rows)
-        cursor.execute("DROP TABLE quota_limits")
-        cursor.execute("ALTER TABLE quota_limits_migrated RENAME TO quota_limits")
-        conn.commit()
-
-    # Created after the migrations above, not alongside CREATE TABLE: on a
-    # database that predates key_hash the table already exists, so the
-    # CREATE TABLE is a no-op and the column only appears once the ALTER
-    # has run. Indexing it any earlier fails on exactly the deployments the
-    # migration exists to serve.
     cursor.execute("""
         CREATE INDEX IF NOT EXISTS idx_usage_logs_user_key_timestamp
         ON usage_logs(user_id, key_hash, timestamp)
     """)
-    # Superseded by the key-scoped index above, which shares its leading
-    # column. Dropped so a migrated database ends up with the same indexes
-    # as a freshly created one.
-    cursor.execute("DROP INDEX IF EXISTS idx_usage_logs_user_timestamp")
-    conn.commit()
 
+    conn.commit()
+    cursor.close()
     conn.close()
 
 
@@ -303,11 +153,12 @@ def save_session(input_type, filename, summary, decisions, action_items, transcr
     decisions = decisions if decisions is not None else []
     action_items = action_items if action_items is not None else []
 
-    conn = sqlite3.connect(DB_PATH)
+    conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute("""
         INSERT INTO sessions (created_at, input_type, filename, transcript, summary, decisions, action_items, user_id, detected_type, key_concepts)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        RETURNING id
     """, (
         # Explicit UTC offset (not the bare datetime.now() this used to be)
         # so every render path — the note list's `new Date(...)`, the docx
@@ -326,18 +177,18 @@ def save_session(input_type, filename, summary, decisions, action_items, transcr
         detected_type,
         json.dumps(key_concepts) if key_concepts is not None else None,
     ))
+    session_id = cursor.fetchone()[0]
     conn.commit()
-    session_id = cursor.lastrowid
     conn.close()
     return session_id
 
 
 def get_all_sessions(user_id=None):
-    conn = sqlite3.connect(DB_PATH)
+    conn = get_db_connection()
     cursor = conn.cursor()
     if user_id is not None:
         cursor.execute(
-            "SELECT id, created_at, input_type, filename, summary, folder_id FROM sessions WHERE user_id = ? ORDER BY created_at DESC",
+            "SELECT id, created_at, input_type, filename, summary, folder_id FROM sessions WHERE user_id = %s ORDER BY created_at DESC",
             (user_id,)
         )
     else:
@@ -355,10 +206,10 @@ def get_all_sessions(user_id=None):
 def get_sessions_by_folder(user_id, folder_id):
     # Folders are scoped per-user, so this stays consistent with
     # get_all_sessions' user scoping even though folder_id alone is unique.
-    conn = sqlite3.connect(DB_PATH)
+    conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute(
-        "SELECT id, created_at, input_type, filename, summary, folder_id FROM sessions WHERE user_id = ? AND folder_id = ? ORDER BY created_at DESC",
+        "SELECT id, created_at, input_type, filename, summary, folder_id FROM sessions WHERE user_id = %s AND folder_id = %s ORDER BY created_at DESC",
         (user_id, folder_id)
     )
     rows = cursor.fetchall()
@@ -370,17 +221,17 @@ def get_sessions_by_folder(user_id, folder_id):
 
 
 def get_session_by_id(session_id, user_id=None):
-    conn = sqlite3.connect(DB_PATH)
+    conn = get_db_connection()
     cursor = conn.cursor()
-    
+
     query = """
         SELECT id, created_at, input_type, filename, transcript, summary, decisions, action_items, user_id, detected_type, key_concepts
         FROM sessions
-        WHERE id = ?
+        WHERE id = %s
     """
     params = [session_id]
     if user_id is not None:
-        query += " AND user_id = ?"
+        query += " AND user_id = %s"
         params.append(user_id)
 
     cursor.execute(query, tuple(params))
@@ -424,37 +275,37 @@ def get_session_by_id(session_id, user_id=None):
 
 
 def delete_session(session_id, user_id=None):
-    conn = sqlite3.connect(DB_PATH)
+    conn = get_db_connection()
     cursor = conn.cursor()
     if user_id is not None:
-        cursor.execute("DELETE FROM sessions WHERE id = ? AND user_id = ?", (session_id, user_id))
+        cursor.execute("DELETE FROM sessions WHERE id = %s AND user_id = %s", (session_id, user_id))
     else:
-        cursor.execute("DELETE FROM sessions WHERE id = ?", (session_id,))
+        cursor.execute("DELETE FROM sessions WHERE id = %s", (session_id,))
     conn.commit()
     conn.close()
 
 
 def create_folder(user_id, name, icon):
-    conn = sqlite3.connect(DB_PATH)
+    conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute(
-        "INSERT INTO folders (user_id, name, icon, created_at) VALUES (?, ?, ?, ?)",
+        "INSERT INTO folders (user_id, name, icon, created_at) VALUES (%s, %s, %s, %s) RETURNING id",
         (user_id, name, icon, datetime.now().isoformat())
     )
+    folder_id = cursor.fetchone()[0]
     conn.commit()
-    folder_id = cursor.lastrowid
     conn.close()
     return {"id": folder_id, "name": name, "icon": icon, "note_count": 0}
 
 
 def get_folders(user_id):
-    conn = sqlite3.connect(DB_PATH)
+    conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute("""
         SELECT folders.id, folders.name, folders.icon, COUNT(sessions.id)
         FROM folders
         LEFT JOIN sessions ON sessions.folder_id = folders.id
-        WHERE folders.user_id = ?
+        WHERE folders.user_id = %s
         GROUP BY folders.id
         ORDER BY folders.created_at ASC
     """, (user_id,))
@@ -467,14 +318,14 @@ def get_folders(user_id):
 
 
 def delete_folder(folder_id, user_id):
-    conn = sqlite3.connect(DB_PATH)
+    conn = get_db_connection()
     cursor = conn.cursor()
     # Notes are never deleted with their folder — just unfiled.
     cursor.execute(
-        "UPDATE sessions SET folder_id = NULL WHERE folder_id = ? AND user_id = ?",
+        "UPDATE sessions SET folder_id = NULL WHERE folder_id = %s AND user_id = %s",
         (folder_id, user_id)
     )
-    cursor.execute("DELETE FROM folders WHERE id = ? AND user_id = ?", (folder_id, user_id))
+    cursor.execute("DELETE FROM folders WHERE id = %s AND user_id = %s", (folder_id, user_id))
     conn.commit()
     conn.close()
 
@@ -482,11 +333,11 @@ def delete_folder(folder_id, user_id):
 def assign_sessions_to_folder(session_ids, user_id, folder_id):
     if not session_ids:
         return
-    conn = sqlite3.connect(DB_PATH)
+    conn = get_db_connection()
     cursor = conn.cursor()
-    placeholders = ",".join("?" for _ in session_ids)
+    placeholders = ",".join(["%s"] * len(session_ids))
     cursor.execute(
-        f"UPDATE sessions SET folder_id = ? WHERE id IN ({placeholders}) AND user_id = ?",
+        f"UPDATE sessions SET folder_id = %s WHERE id IN ({placeholders}) AND user_id = %s",
         (folder_id, *session_ids, user_id)
     )
     conn.commit()
@@ -496,22 +347,22 @@ def assign_sessions_to_folder(session_ids, user_id, folder_id):
 def create_user(username, password, name=None, firebase_uid=None):
     """Creates a new user record with optional name and firebase_uid."""
     password_hash = generate_password_hash(password) if password else ""
-    conn = sqlite3.connect(DB_PATH)
+    conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute(
-        "INSERT INTO users (username, password_hash, name, firebase_uid, created_at) VALUES (?, ?, ?, ?, ?)",
+        "INSERT INTO users (username, password_hash, name, firebase_uid, created_at) VALUES (%s, %s, %s, %s, %s) RETURNING id",
         (username, password_hash, name, firebase_uid, datetime.now().isoformat())
     )
+    user_id = cursor.fetchone()[0]
     conn.commit()
-    user_id = cursor.lastrowid
     conn.close()
     return user_id
 
 
 def get_user_by_firebase_uid(firebase_uid):
-    conn = sqlite3.connect(DB_PATH)
+    conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute("SELECT id, username, password_hash, firebase_uid, name, created_at FROM users WHERE firebase_uid = ?", (firebase_uid,))
+    cursor.execute("SELECT id, username, password_hash, firebase_uid, name, created_at FROM users WHERE firebase_uid = %s", (firebase_uid,))
     row = cursor.fetchone()
     conn.close()
     if not row:
@@ -520,9 +371,9 @@ def get_user_by_firebase_uid(firebase_uid):
 
 
 def get_user_by_email(email):
-    conn = sqlite3.connect(DB_PATH)
+    conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute("SELECT id, username, password_hash, firebase_uid, name, created_at FROM users WHERE username = ?", (email,))
+    cursor.execute("SELECT id, username, password_hash, firebase_uid, name, created_at FROM users WHERE username = %s", (email,))
     row = cursor.fetchone()
     conn.close()
     if not row:
@@ -537,9 +388,9 @@ def create_or_get_user_from_firebase(firebase_uid, email=None, name=None):
     if user:
         if name and not user.get("name"):
             # Update missing name if provided
-            conn = sqlite3.connect(DB_PATH)
+            conn = get_db_connection()
             cursor = conn.cursor()
-            cursor.execute("UPDATE users SET name = ? WHERE id = ?", (name, user["id"]))
+            cursor.execute("UPDATE users SET name = %s WHERE id = %s", (name, user["id"]))
             conn.commit()
             conn.close()
             user["name"] = name
@@ -549,12 +400,12 @@ def create_or_get_user_from_firebase(firebase_uid, email=None, name=None):
     if email:
         user = get_user_by_email(email)
         if user:
-            conn = sqlite3.connect(DB_PATH)
+            conn = get_db_connection()
             cursor = conn.cursor()
             if name and not user.get("name"):
-                cursor.execute("UPDATE users SET firebase_uid = ?, name = ? WHERE id = ?", (firebase_uid, name, user["id"]))
+                cursor.execute("UPDATE users SET firebase_uid = %s, name = %s WHERE id = %s", (firebase_uid, name, user["id"]))
             else:
-                cursor.execute("UPDATE users SET firebase_uid = ? WHERE id = ?", (firebase_uid, user["id"]))
+                cursor.execute("UPDATE users SET firebase_uid = %s WHERE id = %s", (firebase_uid, user["id"]))
             conn.commit()
             conn.close()
             user["firebase_uid"] = firebase_uid
@@ -563,17 +414,16 @@ def create_or_get_user_from_firebase(firebase_uid, email=None, name=None):
             return user
 
     # Create a new user using email as username
-    conn = sqlite3.connect(DB_PATH)
+    conn = get_db_connection()
     cursor = conn.cursor()
     username = email or f"firebase:{firebase_uid}"
-    cursor.execute(
-        "INSERT INTO users (username, password_hash, name, firebase_uid, created_at) VALUES (?, ?, ?, ?, ?)",
-        (username, "", name, firebase_uid, datetime.now().isoformat())
-    )
-    conn.commit()
-    user_id = cursor.lastrowid
-    cursor.execute("SELECT id, username, password_hash, firebase_uid, name, created_at FROM users WHERE id = ?", (user_id,))
+    cursor.execute("""
+        INSERT INTO users (username, password_hash, name, firebase_uid, created_at)
+        VALUES (%s, %s, %s, %s, %s)
+        RETURNING id, username, password_hash, firebase_uid, name, created_at
+    """, (username, "", name, firebase_uid, datetime.now().isoformat()))
     row = cursor.fetchone()
+    conn.commit()
     conn.close()
     return {"id": row[0], "username": row[1], "password_hash": row[2], "firebase_uid": row[3], "name": row[4], "created_at": row[5]}
 
@@ -581,36 +431,36 @@ def create_or_get_user_from_firebase(firebase_uid, email=None, name=None):
 def update_user_email(user_id, email):
     # `username` doubles as the login email, so this is the single place
     # that needs updating when Firebase confirms a new address.
-    conn = sqlite3.connect(DB_PATH)
+    conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute("UPDATE users SET username = ? WHERE id = ?", (email, user_id))
+    cursor.execute("UPDATE users SET username = %s WHERE id = %s", (email, user_id))
     conn.commit()
     conn.close()
 
 
 def update_user_name(user_id, name):
-    conn = sqlite3.connect(DB_PATH)
+    conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute("UPDATE users SET name = ? WHERE id = ?", (name, user_id))
+    cursor.execute("UPDATE users SET name = %s WHERE id = %s", (name, user_id))
     conn.commit()
     conn.close()
 
 
 def delete_user_account(user_id):
     """Cascade-deletes everything owned by a user, then the user row itself."""
-    conn = sqlite3.connect(DB_PATH)
+    conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute("DELETE FROM sessions WHERE user_id = ?", (user_id,))
-    cursor.execute("DELETE FROM folders WHERE user_id = ?", (user_id,))
-    cursor.execute("DELETE FROM users WHERE id = ?", (user_id,))
+    cursor.execute("DELETE FROM sessions WHERE user_id = %s", (user_id,))
+    cursor.execute("DELETE FROM folders WHERE user_id = %s", (user_id,))
+    cursor.execute("DELETE FROM users WHERE id = %s", (user_id,))
     conn.commit()
     conn.close()
 
 
 def get_user_by_username(username):
-    conn = sqlite3.connect(DB_PATH)
+    conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute("SELECT id, username, password_hash, name, created_at FROM users WHERE username = ?", (username,))
+    cursor.execute("SELECT id, username, password_hash, name, created_at FROM users WHERE username = %s", (username,))
     row = cursor.fetchone()
     conn.close()
     if not row:
@@ -621,9 +471,9 @@ def get_user_by_username(username):
 def get_user_api_key(user_id):
     # Always scope the API key lookup to the authenticated user's numeric id.
     # This ensures no shared or global key is accidentally returned.
-    conn = sqlite3.connect(DB_PATH)
+    conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute("SELECT gemini_api_key FROM users WHERE id = ?", (user_id,))
+    cursor.execute("SELECT gemini_api_key FROM users WHERE id = %s", (user_id,))
     row = cursor.fetchone()
     conn.close()
     if not row:
@@ -633,9 +483,9 @@ def get_user_api_key(user_id):
 
 def set_user_api_key(user_id, api_key):
     # Store the provided API key only for the authenticated user's record.
-    conn = sqlite3.connect(DB_PATH)
+    conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute("UPDATE users SET gemini_api_key = ? WHERE id = ?", (api_key, user_id))
+    cursor.execute("UPDATE users SET gemini_api_key = %s WHERE id = %s", (api_key, user_id))
     conn.commit()
     conn.close()
 
@@ -643,9 +493,9 @@ def set_user_api_key(user_id, api_key):
 def get_user_summary_language(user_id):
     # NULL/empty means "match the transcript's language" (Gemini's existing
     # default behavior when no language is specified).
-    conn = sqlite3.connect(DB_PATH)
+    conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute("SELECT summary_language FROM users WHERE id = ?", (user_id,))
+    cursor.execute("SELECT summary_language FROM users WHERE id = %s", (user_id,))
     row = cursor.fetchone()
     conn.close()
     if not row:
@@ -654,17 +504,17 @@ def get_user_summary_language(user_id):
 
 
 def set_user_summary_language(user_id, language):
-    conn = sqlite3.connect(DB_PATH)
+    conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute("UPDATE users SET summary_language = ? WHERE id = ?", (language, user_id))
+    cursor.execute("UPDATE users SET summary_language = %s WHERE id = %s", (language, user_id))
     conn.commit()
     conn.close()
 
 
 def get_user_by_id(user_id):
-    conn = sqlite3.connect(DB_PATH)
+    conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute("SELECT id, username, password_hash, name, created_at FROM users WHERE id = ?", (user_id,))
+    cursor.execute("SELECT id, username, password_hash, name, created_at FROM users WHERE id = %s", (user_id,))
     row = cursor.fetchone()
     conn.close()
     if not row:
@@ -682,10 +532,14 @@ def authenticate_user(username, password):
 
 
 def _utcnow_iso():
-    # Naive ISO string in UTC, matching the format SQLite's own
-    # datetime('now') produces, so string comparisons in the rolling-window
-    # queries below stay apples-to-apples with what gets inserted here.
+    # Naive ISO string in UTC (no SQL-side "now" function involved), so
+    # string comparisons in the rolling-window queries below stay
+    # apples-to-apples with what gets inserted here.
     return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+
+
+def _utc_cutoff_iso(delta):
+    return (datetime.now(timezone.utc) - delta).strftime("%Y-%m-%d %H:%M:%S")
 
 
 def log_usage(user_id, key_hash, request_type, status, estimated_tokens=None, actual_tokens=None):
@@ -693,14 +547,17 @@ def log_usage(user_id, key_hash, request_type, status, estimated_tokens=None, ac
     key that made it. Only called once it's known whether Gemini was
     actually invoked — a request rejected by the local pre-flight check
     never reaches here, since it never touched real quota."""
-    conn = sqlite3.connect(DB_PATH)
+    conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute("""
         INSERT INTO usage_logs (user_id, key_hash, timestamp, request_type, estimated_tokens, actual_tokens, status)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
+        VALUES (%s, %s, %s, %s, %s, %s, %s)
     """, (user_id, key_hash, _utcnow_iso(), request_type, estimated_tokens, actual_tokens, status))
     conn.commit()
     conn.close()
+
+
+_USAGE_WINDOW_DELTAS = {"1 minute": timedelta(minutes=1), "1 day": timedelta(days=1)}
 
 
 def get_usage_window(user_id, key_hash, window):
@@ -713,16 +570,17 @@ def get_usage_window(user_id, key_hash, window):
     would double-penalize the user. Also returns the oldest timestamp in the
     window, which callers use to work out when the window will next free up
     capacity."""
-    if window not in ("1 minute", "1 day"):
+    if window not in _USAGE_WINDOW_DELTAS:
         raise ValueError(f"Unsupported usage window: {window!r}")
-    conn = sqlite3.connect(DB_PATH)
+    cutoff = _utc_cutoff_iso(_USAGE_WINDOW_DELTAS[window])
+    conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute(f"""
+    cursor.execute("""
         SELECT COALESCE(SUM(actual_tokens), 0), COUNT(*), MIN(timestamp)
         FROM usage_logs
-        WHERE user_id = ? AND key_hash = ? AND status = 'success'
-          AND timestamp >= datetime('now', '-{window}')
-    """, (user_id, key_hash))
+        WHERE user_id = %s AND key_hash = %s AND status = 'success'
+          AND timestamp >= %s
+    """, (user_id, key_hash, cutoff))
     tokens, requests, oldest_timestamp = cursor.fetchone()
     conn.close()
     return {"tokens": tokens, "requests": requests, "oldest_timestamp": oldest_timestamp}
@@ -730,20 +588,20 @@ def get_usage_window(user_id, key_hash, window):
 
 def cleanup_old_usage_logs(batch_size=500):
     """Deletes usage_logs rows older than the longest rolling window (1 day)
-    in small batches so the sweep never holds a write lock for long, per
-    SQLite's lack of a native DELETE ... LIMIT."""
-    conn = sqlite3.connect(DB_PATH)
+    in small batches so the sweep never holds a write lock for long."""
+    cutoff = _utc_cutoff_iso(timedelta(days=1))
+    conn = get_db_connection()
     cursor = conn.cursor()
     total_deleted = 0
     while True:
         cursor.execute("""
             DELETE FROM usage_logs
-            WHERE rowid IN (
-                SELECT rowid FROM usage_logs
-                WHERE timestamp < datetime('now', '-1 day')
-                LIMIT ?
+            WHERE id IN (
+                SELECT id FROM usage_logs
+                WHERE timestamp < %s
+                LIMIT %s
             )
-        """, (batch_size,))
+        """, (cutoff, batch_size))
         conn.commit()
         deleted = cursor.rowcount
         total_deleted += max(deleted, 0)
@@ -753,34 +611,55 @@ def cleanup_old_usage_logs(batch_size=500):
     return total_deleted
 
 
+_QUOTA_SELECT = (
+    "SELECT tier, rpm_limit, tpm_limit, rpd_limit, cooldown_until, "
+    "rpm_limit_corrected_at, tpm_limit_corrected_at, rpd_limit_corrected_at "
+    "FROM quota_limits WHERE user_id = %s AND key_hash = %s"
+)
+
+
+def _quota_row_to_dict(row):
+    return {
+        "tier": row[0], "rpm_limit": row[1], "tpm_limit": row[2], "rpd_limit": row[3],
+        "cooldown_until": row[4], "rpm_limit_corrected_at": row[5],
+        "tpm_limit_corrected_at": row[6], "rpd_limit_corrected_at": row[7],
+    }
+
+
 def get_quota_limits(user_id, key_hash, defaults):
     """Returns the tracked RPM/TPM/RPD limits for one of the user's API keys,
     seeding them from `defaults` (Google's published free-tier numbers for
     the model in use) the first time that key is seen. Stored per key, so
     each key a user holds carries its own limits, cooldown, and
     corrections."""
-    conn = sqlite3.connect(DB_PATH)
+    conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute(
-        "SELECT tier, rpm_limit, tpm_limit, rpd_limit, cooldown_until, "
-        "rpm_limit_corrected_at, tpm_limit_corrected_at, rpd_limit_corrected_at "
-        "FROM quota_limits WHERE user_id = ? AND key_hash = ?",
-        (user_id, key_hash)
-    )
+    cursor.execute(_QUOTA_SELECT, (user_id, key_hash))
     row = cursor.fetchone()
-    if row is None:
+    if row is not None:
+        conn.close()
+        return _quota_row_to_dict(row)
+
+    try:
         cursor.execute("""
             INSERT INTO quota_limits (user_id, key_hash, tier, rpm_limit, tpm_limit, rpd_limit, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
         """, (user_id, key_hash, defaults["tier"], defaults["rpm"], defaults["tpm"], defaults["rpd"], _utcnow_iso()))
         conn.commit()
         conn.close()
         return {"tier": defaults["tier"], "rpm_limit": defaults["rpm"], "tpm_limit": defaults["tpm"],
                 "rpd_limit": defaults["rpd"], "cooldown_until": None,
                 "rpm_limit_corrected_at": None, "tpm_limit_corrected_at": None, "rpd_limit_corrected_at": None}
-    conn.close()
-    return {"tier": row[0], "rpm_limit": row[1], "tpm_limit": row[2], "rpd_limit": row[3], "cooldown_until": row[4],
-            "rpm_limit_corrected_at": row[5], "tpm_limit_corrected_at": row[6], "rpd_limit_corrected_at": row[7]}
+    except psycopg2.errors.UniqueViolation:
+        # Two app instances raced to seed the same never-seen key — the
+        # loser reads back whichever row the winner just committed instead
+        # of erroring, now that concurrent instances hitting this at once is
+        # the normal case rather than a rare local-dev race.
+        conn.rollback()
+        cursor.execute(_QUOTA_SELECT, (user_id, key_hash))
+        row = cursor.fetchone()
+        conn.close()
+        return _quota_row_to_dict(row)
 
 
 def update_quota_limit(user_id, key_hash, dimension, new_limit):
@@ -790,12 +669,12 @@ def update_quota_limit(user_id, key_hash, dimension, new_limit):
     when it's safe to re-test whether the correction was too conservative."""
     if dimension not in ("rpm_limit", "tpm_limit", "rpd_limit"):
         raise ValueError(f"Unsupported quota dimension: {dimension!r}")
-    conn = sqlite3.connect(DB_PATH)
+    conn = get_db_connection()
     cursor = conn.cursor()
     now = _utcnow_iso()
     cursor.execute(
-        f"UPDATE quota_limits SET {dimension} = ?, updated_at = ?, {dimension}_corrected_at = ? "
-        "WHERE user_id = ? AND key_hash = ?",
+        f"UPDATE quota_limits SET {dimension} = %s, updated_at = %s, {dimension}_corrected_at = %s "
+        "WHERE user_id = %s AND key_hash = %s",
         (new_limit, now, now, user_id, key_hash)
     )
     conn.commit()
@@ -809,11 +688,11 @@ def relax_quota_limit(user_id, key_hash, dimension, new_limit):
     limit only drifts down again on a real Gemini 429."""
     if dimension not in ("rpm_limit", "tpm_limit", "rpd_limit"):
         raise ValueError(f"Unsupported quota dimension: {dimension!r}")
-    conn = sqlite3.connect(DB_PATH)
+    conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute(
-        f"UPDATE quota_limits SET {dimension} = ?, updated_at = ?, {dimension}_corrected_at = NULL "
-        "WHERE user_id = ? AND key_hash = ?",
+        f"UPDATE quota_limits SET {dimension} = %s, updated_at = %s, {dimension}_corrected_at = NULL "
+        "WHERE user_id = %s AND key_hash = %s",
         (new_limit, _utcnow_iso(), user_id, key_hash)
     )
     conn.commit()
@@ -830,7 +709,8 @@ def get_all_quota_limits():
     endpoint targets; older keys remain listed so their retained history is
     visible."""
     conn = get_db_connection()
-    rows = conn.execute("""
+    cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    cursor.execute("""
         SELECT u.id AS user_id, u.username, u.name, q.key_hash,
                q.tier, q.rpm_limit, q.tpm_limit, q.rpd_limit, q.cooldown_until,
                q.rpm_limit_corrected_at, q.tpm_limit_corrected_at, q.rpd_limit_corrected_at,
@@ -838,13 +718,12 @@ def get_all_quota_limits():
         FROM users u
         LEFT JOIN quota_limits q ON q.user_id = u.id
         ORDER BY u.id, q.updated_at
-    """).fetchall()
-    active_hashes = {
-        row["id"]: hash_api_key(row["gemini_api_key"])
-        for row in conn.execute(
-            "SELECT id, gemini_api_key FROM users WHERE gemini_api_key IS NOT NULL AND gemini_api_key != ''"
-        ).fetchall()
-    }
+    """)
+    rows = cursor.fetchall()
+    cursor.execute(
+        "SELECT id, gemini_api_key FROM users WHERE gemini_api_key IS NOT NULL AND gemini_api_key != ''"
+    )
+    active_hashes = {row["id"]: hash_api_key(row["gemini_api_key"]) for row in cursor.fetchall()}
     conn.close()
     result = []
     for row in rows:
@@ -863,10 +742,10 @@ def set_quota_tier(user_id, key_hash, tier):
     column, so changing it alone does not change what a user can do —
     rpm_limit/tpm_limit/rpd_limit must be set explicitly to actually raise
     or lower their capacity."""
-    conn = sqlite3.connect(DB_PATH)
+    conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute(
-        "UPDATE quota_limits SET tier = ?, updated_at = ? WHERE user_id = ? AND key_hash = ?",
+        "UPDATE quota_limits SET tier = %s, updated_at = %s WHERE user_id = %s AND key_hash = %s",
         (tier, _utcnow_iso(), user_id, key_hash)
     )
     conn.commit()
@@ -897,10 +776,10 @@ def set_quota_cooldown(user_id, key_hash, until_iso):
     rolling-window math still looks like it has room. Scoped to the key that
     was actually told to back off — another key of the same user's is a
     separate budget and isn't under this cooldown."""
-    conn = sqlite3.connect(DB_PATH)
+    conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute(
-        "UPDATE quota_limits SET cooldown_until = ?, updated_at = ? WHERE user_id = ? AND key_hash = ?",
+        "UPDATE quota_limits SET cooldown_until = %s, updated_at = %s WHERE user_id = %s AND key_hash = %s",
         (until_iso, _utcnow_iso(), user_id, key_hash)
     )
     conn.commit()

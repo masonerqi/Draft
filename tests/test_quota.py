@@ -1,4 +1,3 @@
-import sqlite3
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -21,10 +20,11 @@ def _insert_usage_at(user_id, timestamp, api_key=KEY_A, request_type="text", sta
     """Inserts a usage_logs row at an explicit timestamp — unlike
     database.log_usage (always "now"), so tests can put usage inside the
     1-day RPD window while keeping it outside the 1-minute RPM/TPM window."""
-    conn = sqlite3.connect(database.DB_PATH)
-    conn.execute(
+    conn = database.get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(
         "INSERT INTO usage_logs (user_id, key_hash, timestamp, request_type, estimated_tokens, actual_tokens, status) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?)",
+        "VALUES (%s, %s, %s, %s, %s, %s, %s)",
         (user_id, _hash(api_key), timestamp, request_type, estimated_tokens, actual_tokens, status),
     )
     conn.commit()
@@ -219,9 +219,10 @@ def test_maybe_relax_limit_resets_a_stale_correction_to_the_tier_default(db_path
     database.update_quota_limit(user_id, _hash(KEY_A), "rpd_limit", 3)
 
     stale = (datetime.now(timezone.utc) - timedelta(hours=25)).strftime("%Y-%m-%d %H:%M:%S")
-    conn = sqlite3.connect(database.DB_PATH)
-    conn.execute("UPDATE quota_limits SET rpd_limit_corrected_at = ? WHERE user_id = ? AND key_hash = ?",
-                 (stale, user_id, _hash(KEY_A)))
+    conn = database.get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("UPDATE quota_limits SET rpd_limit_corrected_at = %s WHERE user_id = %s AND key_hash = %s",
+                   (stale, user_id, _hash(KEY_A)))
     conn.commit()
     conn.close()
 
@@ -339,6 +340,8 @@ def test_compute_quota_status_without_a_key_reports_an_untouched_budget(db_path,
     assert status["rpd"]["limit"] == quota.get_default_limits()["rpd"]
     assert status["cooldown_until"] is None
     # No tracking row should have been seeded for a key that doesn't exist.
-    conn = sqlite3.connect(database.DB_PATH)
-    assert conn.execute("SELECT COUNT(*) FROM quota_limits WHERE user_id = ?", (user_id,)).fetchone()[0] == 0
+    conn = database.get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT COUNT(*) FROM quota_limits WHERE user_id = %s", (user_id,))
+    assert cursor.fetchone()[0] == 0
     conn.close()

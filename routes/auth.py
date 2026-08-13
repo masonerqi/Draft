@@ -1,4 +1,4 @@
-﻿import sqlite3
+﻿import psycopg2
 
 from flask import Blueprint, session, jsonify, render_template, request, redirect, url_for
 from routes.utils import _parse_request_payload, get_current_user, login_required, _mask_api_key
@@ -204,7 +204,7 @@ def sync_session():
     if email and email != current_user.get('username'):
         try:
             update_user_email(current_user['id'], email)
-        except sqlite3.IntegrityError:
+        except psycopg2.IntegrityError:
             return jsonify({'message': 'This email address is already registered.'}), 409
         session['user_email'] = email
     elif email:

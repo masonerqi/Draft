@@ -9,13 +9,26 @@ import database
 
 
 @pytest.fixture
-def db_path(tmp_path, monkeypatch):
-    """Points database.py at a throwaway sqlite file for the duration of one
-    test, so tests never touch the real data/database.db."""
-    path = str(tmp_path / "test.db")
-    monkeypatch.setattr(database, "DB_PATH", path)
+def db_path(monkeypatch):
+    """Points database.py at a throwaway Postgres database for the duration
+    of one test, so tests never touch the real deployed database. Requires
+    TEST_DATABASE_URL (or DATABASE_URL) to point at a real, disposable
+    Postgres instance — e.g. a local `docker run postgres` — since the app
+    no longer supports a file-based database."""
+    test_url = os.environ.get("TEST_DATABASE_URL") or os.environ.get("DATABASE_URL")
+    if not test_url:
+        pytest.skip("Set TEST_DATABASE_URL (or DATABASE_URL) to a throwaway Postgres database to run this suite.")
+    monkeypatch.setattr(database, "DATABASE_URL", test_url)
+
+    conn = database.get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("DROP TABLE IF EXISTS quota_limits, usage_logs, sessions, folders, users CASCADE")
+    conn.commit()
+    cursor.close()
+    conn.close()
+
     database.init_db()
-    return path
+    return test_url
 
 
 @pytest.fixture

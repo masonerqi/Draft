@@ -9,11 +9,9 @@ from dotenv import load_dotenv
 MAX_UPLOAD_BYTES = 300 * 1024 * 1024
 
 # Ensure environment variables from .env are loaded before any module below
-# reads them at import time (database.py resolves DATABASE_PATH as soon as
+# reads them at import time (database.py resolves DATABASE_URL as soon as
 # it's imported) — loading dotenv after that import was a real bug: .env's
-# DATABASE_PATH was silently never applied, and DB_PATH fell back to a
-# cwd-relative default that could differ between how/where the server was
-# launched, making data look like it "disappeared" across runs.
+# DATABASE_URL was silently never applied, leaving the database unreachable.
 load_dotenv()
 
 # Import database init function
