@@ -1,4 +1,11 @@
 <header class="app-header">
+  <!-- Mobile only (<= 800px, see workspace.css): opens the sidebar as an
+       off-canvas drawer. Hidden on desktop, where the sidebar is always
+       visible as its own resizable grid column. -->
+  <button type="button" class="app-header-menu-btn" id="sidebar-toggle-btn"
+          aria-label="Open menu" aria-controls="app-sidebar" aria-expanded="false">
+    <i data-lucide="menu"></i>
+  </button>
   <div class="app-header-brand">
     <img src="{{ url_for('static', filename='images/logo_white.svg') }}" alt="Draft" class="app-header-logo app-header-logo-dark" />
     <img src="{{ url_for('static', filename='images/logo_black.svg') }}" alt="Draft" class="app-header-logo app-header-logo-light" />

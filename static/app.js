@@ -1889,6 +1889,80 @@ function initializeSidebarResize() {
   window.addEventListener("mouseleave", stopResizing);
 }
 
+/* Mobile navigation drawer.
+
+   Below MOBILE_NAV_BREAKPOINT the sidebar is positioned off-canvas (see the
+   drawer block in workspace.css) and only slides in while <body> carries
+   .sidebar-open. Everything here just maintains that one class; above the
+   breakpoint the class has no styling attached, so the desktop sidebar is
+   unaffected either way. */
+const MOBILE_NAV_BREAKPOINT = 800;
+
+function isMobileNav() {
+  return window.matchMedia(`(max-width: ${MOBILE_NAV_BREAKPOINT}px)`).matches;
+}
+
+function setSidebarOpen(open) {
+  // Never leave the body scroll-locked at desktop widths, where there is no
+  // drawer to close.
+  const shouldOpen = Boolean(open) && isMobileNav();
+  document.body.classList.toggle("sidebar-open", shouldOpen);
+
+  const toggle = document.getElementById("sidebar-toggle-btn");
+  if (toggle) toggle.setAttribute("aria-expanded", shouldOpen ? "true" : "false");
+
+  // A closed drawer is only moved off-screen, so without this its buttons stay
+  // in the tab order and a keyboard user tabs into a menu they cannot see.
+  // Gated on isMobileNav() rather than on shouldOpen alone — the desktop
+  // sidebar is always on screen and must never be made inert.
+  const sidebar = document.getElementById("app-sidebar");
+  if (sidebar) sidebar.inert = isMobileNav() && !shouldOpen;
+}
+
+function closeSidebar() {
+  setSidebarOpen(false);
+}
+
+function initializeMobileNav() {
+  const toggle = document.getElementById("sidebar-toggle-btn");
+  const closeButton = document.getElementById("sidebar-close-btn");
+  const scrim = document.getElementById("sidebar-scrim");
+  const sidebar = document.getElementById("app-sidebar");
+
+  if (toggle) {
+    toggle.addEventListener("click", () => {
+      setSidebarOpen(!document.body.classList.contains("sidebar-open"));
+    });
+  }
+  if (closeButton) closeButton.addEventListener("click", closeSidebar);
+  if (scrim) scrim.addEventListener("click", closeSidebar);
+
+  if (sidebar) {
+    // Delegated so folder rows rendered later by renderFolderList() are
+    // covered too. Picking something in the drawer means navigating, so the
+    // drawer gets out of the way — except for the folder overflow menu,
+    // whose whole point is to open a second layer inside the drawer.
+    sidebar.addEventListener("click", (event) => {
+      if (event.target.closest("#sidebar-close-btn")) return;
+      if (event.target.closest(".folder-more-wrap")) return;
+      if (event.target.closest("button, a")) closeSidebar();
+    });
+  }
+
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") closeSidebar();
+  });
+
+  // Rotating to landscape or crossing the breakpoint in either direction has
+  // to be re-evaluated: widening would otherwise strand the body in its
+  // locked, drawer-open state, and narrowing has to make the now-hidden
+  // drawer inert.
+  window.addEventListener("resize", closeSidebar);
+
+  // Establishes the correct closed/inert state for the width we loaded at.
+  closeSidebar();
+}
+
 const THEME_STORAGE_KEY = "draft-theme";
 
 function applyTheme(theme) {
@@ -2111,6 +2185,7 @@ function initializeEventListeners() {
 async function initializeApp() {
   initializeTheme();
   initializeSidebarResize();
+  initializeMobileNav();
   initializeLanguagePicker();
   initializeSettingsTabs();
   initializeSummaryLanguagePicker();

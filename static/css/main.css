@@ -351,6 +351,10 @@ textarea.transcription-textarea:focus { border-color: #C7C5BE; background: #fff;
 .settings-link { padding: 0; border: none; background: transparent; color: var(--green); font-size: 13px; font-weight: 650; text-decoration: none; cursor: pointer; }
 .settings-link:hover { text-decoration: underline; }
 .settings-link:disabled { opacity: .5; cursor: not-allowed; text-decoration: none; }
+/* Settings and the confirm dialogs only exist in the workspace, and
+   workspace.css re-declares some of these rules after this file — their
+   phone layout therefore lives in that file's small-screen block, so it
+   actually wins the cascade. */
 @media (max-width: 700px) {
   .settings-layout { flex-direction: column; }
   .settings-nav { flex-direction: row; flex: 0 0 auto; align-items: center; gap: 6px; overflow-x: auto; border-right: 0; border-bottom: 1px solid var(--line); }
@@ -358,8 +362,35 @@ textarea.transcription-textarea:focus { border-color: #C7C5BE; background: #fff;
 }
 .auth-wrapper { display: grid; min-height: 100vh; place-items: center; padding: 24px; }.card--auth { width: min(420px, 100%); padding: 30px; }.auth-logo { width: auto; height: 56px; margin-bottom: 28px; object-fit: contain; }.card--auth h1 { margin: 0 0 7px; font-size: 26px; letter-spacing: -.04em; }.auth-intro { margin: 0 0 24px; color: var(--ink-soft); font-size: 14px; }.form-group { margin-bottom: 16px; }.form-group label { display: block; margin-bottom: 7px; color: var(--ink-soft); font-size: 12px; font-weight: 650; }.card--auth input { margin: 0; }.card--auth .btn-primary { width: 100%; margin-top: 4px; }.auth-footer-links { display: flex; justify-content: space-between; gap: 12px; margin-top: 16px; font-size: 13px; }.auth-footer-links a, .auth-switch a { color: var(--ink-soft); text-decoration: none; }.auth-footer-links a:hover, .auth-switch a:hover { color: var(--green); }.auth-switch { margin: 18px 0 0; color: var(--ink-soft); font-size: 13px; text-align: center; }.auth-message { min-height: 20px; margin: 12px 0 0; color: var(--red); font-size: 12px; }
 
+/* Below this width the sidebar stops being a grid column and becomes an
+   off-canvas drawer instead — those rules live in workspace.css, next to the
+   header that owns the hamburger, since only the workspace has a sidebar.
+   What's left here is the content-level reflow, which auth.html shares. */
 @media (max-width: 800px) {
-  .app-shell { display: block; }.sidebar-resizer { display: none; }.sidebar { position: static; height: auto; padding: 14px 16px; border-bottom: 1px solid var(--line); border-right: 0; }.sidebar-top { display: flex; align-items: center; justify-content: space-between; gap: 12px; }.sidebar-section, .sidebar-footer { display: none; }.brand { padding-left: 0; }.sidebar-button { min-height: 36px; }.main-content { padding: 36px 16px; }.topbar { display: block; }.page-title { font-size: 32px; }.page-copy { font-size: 14px; }.home-heading { display: grid; }.home-heading .btn-primary { width: 100%; }.transcript-header { display: block !important; }.status-badge { display: inline-flex !important; margin-top: 14px; }.result-grid { grid-template-columns: 1fr; }.action-row { justify-content: stretch; }.action-row button { flex: 1; }.control-dock-wrapper { justify-content: center; }
+  .app-shell { display: block; }
+  .sidebar-resizer { display: none; }
+  .brand { padding-left: 0; }
+  .sidebar-button { min-height: 36px; }
+  .main-content { padding: 28px 16px 36px; }
+  .topbar { display: block; }
+  .page-title { font-size: 32px; }
+  .page-copy { font-size: 14px; }
+  .home-heading { display: grid; }
+  .home-heading .btn-primary { width: 100%; }
+  .search-heading { flex-wrap: wrap; }
+  .transcript-header { display: block !important; }
+  .transcript-header-actions { flex-direction: row; align-items: center; flex-wrap: wrap; gap: 10px; margin-top: 14px; }
+  .status-badge { display: inline-flex !important; }
+  .result-grid { grid-template-columns: 1fr; }
+  .action-row { justify-content: stretch; }
+  .action-row button { flex: 1; }
+  .control-dock-wrapper { justify-content: center; }
+  .bulk-actions-bar { flex-wrap: wrap; }
+  .bulk-actions-buttons { flex-wrap: wrap; }
+  /* iOS Safari zooms the page in whenever a focused field is under 16px, and
+     the workspace's base size is 14px — pin the fields themselves to 16px so
+     tapping into one doesn't rescale the whole layout. */
+  input, textarea, select, textarea.transcription-textarea { font-size: 16px; }
 }
 
 .toast-success, .toast-danger {

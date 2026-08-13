@@ -251,7 +251,115 @@ body { font-size: 14px; }
 :root[data-theme="dark"] .modal { background: rgba(0, 0, 0, .55); }
 :root[data-theme="dark"] .error-banner { border-color: rgba(224, 133, 133, .35); }
 
+/* ---------------------------------------------------------------------------
+   Mobile navigation drawer
+
+   The sidebar is a resizable grid column on desktop, which stops working once
+   the viewport is narrower than roughly two columns. Below 800px it becomes an
+   off-canvas drawer instead, opened by the hamburger in the header and closed
+   by the scrim, the in-drawer ✕, Escape, or picking anything inside it (see
+   initializeMobileNav() in app.js, which drives the body.sidebar-open class).
+
+   The three drawer-only controls are display:none outside the media query, so
+   above 800px this whole feature is inert and the desktop layout is exactly
+   what it was before.
+   ------------------------------------------------------------------------ */
+.app-header-menu-btn { display: none; }
+.sidebar-mobile-head { display: none; }
+.sidebar-scrim { display: none; }
+
 @media (max-width: 800px) {
   .app-viewport { height: auto; min-height: 100vh; }
-  .app-header { padding: 12px 16px; }
+  /* Hamburger first, logo next to it — not pushed to the far edge. */
+  .app-header { justify-content: flex-start; gap: 10px; padding: 10px 14px; }
+  .app-header-logo { height: 38px; }
+
+  .app-header-menu-btn {
+    display: grid;
+    place-items: center;
+    flex: 0 0 auto;
+    width: 42px;
+    height: 42px;
+    border-radius: var(--radius-sm);
+    background: transparent;
+    color: var(--ink);
+    transition: background .16s ease;
+  }
+  .app-header-menu-btn:hover { background: var(--surface-subtle); }
+  .app-header-menu-btn i { width: 22px; height: 22px; }
+
+  /* top/bottom rather than height:100vh: mobile browsers report 100vh as the
+     tallest possible viewport, which puts the profile card behind the address
+     bar until the user scrolls. */
+  .sidebar {
+    position: fixed;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    z-index: 15;   /* under .modal / .loading-overlay (20) and the toasts (200) */
+    width: min(304px, 86vw);
+    height: auto;
+    padding: 10px 14px 16px;
+    gap: 18px;
+    border-right: 1px solid var(--line);
+    transform: translateX(-100%);
+    transition: transform .24s var(--ease-standard, ease);
+  }
+  body.sidebar-open .sidebar {
+    transform: translateX(0);
+    box-shadow: 0 24px 64px rgba(0, 0, 0, .38);
+  }
+
+  .sidebar-mobile-head { display: flex; justify-content: flex-end; flex: 0 0 auto; }
+
+  .sidebar-scrim {
+    position: fixed;
+    inset: 0;
+    z-index: 14;
+    display: block;
+    background: rgba(0, 0, 0, .45);
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity .24s ease;
+  }
+  body.sidebar-open .sidebar-scrim { opacity: 1; pointer-events: auto; }
+  /* The page scrolls at document level on mobile (.app-viewport is auto
+     height above), so the lock belongs on the body. */
+  body.sidebar-open { overflow: hidden; }
+
+  /* Roomier tap targets inside the drawer than the desktop sidebar's. */
+  .sidebar .nav-item { min-height: 44px; }
+  .sidebar .icon-button { width: 38px; height: 38px; }
+  /* A folder row's overflow menu is revealed by :hover on desktop, which
+     touch never fires — it has to be permanently visible here instead. */
+  .sidebar .folder-more-btn { width: 32px; height: 32px; opacity: 1; }
+  .sidebar .folder-more-btn i { width: 15px; height: 15px; }
+}
+
+/* Settings + confirm dialogs on a phone. These live here rather than in
+   main.css because several of the rules they override (.settings-row,
+   .btn-danger) are declared in this file, which loads last. */
+@media (max-width: 700px) {
+  /* No room for the "popped out" panel treatment — Settings takes the whole
+     screen instead of being a small window floating on a backdrop. */
+  .settings-panel { width: 100%; max-width: none; height: 100%; max-height: none; border: 0; border-radius: 0; }
+  /* The tab strip scrolls sideways, so each tab has to size to its own label.
+     The base .nav-item is width:100%, which would give every tab the full
+     strip width and leave only the first one on screen. */
+  .settings-nav .nav-item { flex: 0 0 auto; width: auto; white-space: nowrap; }
+  .settings-content { padding: 22px 18px 32px; }
+  .settings-row { flex-direction: column; align-items: flex-start; gap: 12px; }
+  .settings-card-actions { width: 100%; }
+  .theme-toggle { flex-wrap: wrap; }
+  .theme-option { width: calc(50% - 6px); min-width: 130px; }
+  /* Stacked, primary action on top. The desktop rule gives both buttons
+     flex:1 1 0 to split the row evenly — reset that, or a column container
+     with a zero flex-basis collapses them to their min-content height. */
+  .modal-footer--confirm { flex-direction: column-reverse; }
+  .modal-footer--confirm .sidebar-button-outline,
+  .modal-footer--confirm .btn-danger { flex: 0 0 auto; width: 100%; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sidebar, .sidebar-scrim { transition: none; }
 }

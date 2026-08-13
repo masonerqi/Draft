@@ -1,4 +1,13 @@
-<aside class="sidebar">
+<aside class="sidebar" id="app-sidebar">
+  <!-- Mobile only (<= 800px, see workspace.css): the drawer covers the header
+       and its hamburger, so it carries its own dismiss control. display:none
+       on desktop, so it never takes part in the sidebar's flex column there. -->
+  <div class="sidebar-mobile-head">
+    <button type="button" class="icon-button" id="sidebar-close-btn" aria-label="Close menu">
+      <i data-lucide="x"></i>
+    </button>
+  </div>
+
   <div class="sidebar-top">
     <div class="sidebar-actions">
       <button type="button" class="sidebar-button" id="new-session-btn">
