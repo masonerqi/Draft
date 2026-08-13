@@ -1145,9 +1145,11 @@ function clearFolderHighlight() {
 }
 
 window.loadSession = async function (id) {
+  showLoading("session", 1.4);
   try {
     const res = await fetch(`/sessions/${id}`, { credentials: "same-origin" });
     if (!res.ok) {
+      hideLoading();
       showError("This session couldn't be loaded. It may have been removed.");
       return;
     }
@@ -1155,6 +1157,7 @@ window.loadSession = async function (id) {
     showResults(data);
   } catch (err) {
     console.error("Session load exception:", err);
+    hideLoading();
     showError("This session couldn't be loaded. It may be corrupted.");
   }
 };
@@ -1459,6 +1462,10 @@ const LOADING_STAGES = {
     { at: 30, msg: "Gemini is transcribing the audio…" },
     { at: 62, msg: "Finding the key points…" },
     { at: 84, msg: "Drafting the summary…" },
+  ],
+  session: [
+    { at: 0, msg: "Opening your note…" },
+    { at: 60, msg: "Loading summary…" },
   ],
 };
 
