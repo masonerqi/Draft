@@ -169,6 +169,24 @@ textarea.transcription-textarea:focus { border-color: #C7C5BE; background: #fff;
 .btn-outline:hover, .text-button:hover, .button-secondary:hover { border-color: #D9D7D0; background: var(--surface-subtle); color: var(--ink); }
 .action-row i, .btn-primary i, .btn-outline i, .button i { width: 15px; height: 15px; }
 
+/* In-flight button state: swaps the label for a small pulsing "wave" so a
+   slow round trip never reads as an unregistered click. Set via
+   setButtonLoading() in app.js; same visual language as the auth page's
+   version (static/css/auth.css) but generalized to any .button/.icon-button
+   rather than the auth form's specific buttons. */
+.button, .icon-button { position: relative; }
+.button.is-loading, .icon-button.is-loading { color: transparent; cursor: default; }
+.btn-loading-bars { position: absolute; inset: 0; display: none; align-items: center; justify-content: center; gap: 4px; }
+.is-loading .btn-loading-bars { display: flex; }
+.btn-loading-bars span { width: 3px; height: 14px; border-radius: 99px; animation: appBtnWave .85s ease-in-out infinite; }
+.button .btn-loading-bars span { background: #fff; }
+.icon-button .btn-loading-bars span { background: var(--ink-faint); }
+.btn-loading-bars span:nth-child(1) { animation-delay: -0.6s; }
+.btn-loading-bars span:nth-child(2) { animation-delay: -0.45s; }
+.btn-loading-bars span:nth-child(3) { animation-delay: -0.3s; }
+.btn-loading-bars span:nth-child(4) { animation-delay: -0.15s; }
+@keyframes appBtnWave { 0%, 100% { transform: scaleY(.35); opacity: .55; } 50% { transform: scaleY(1); opacity: 1; } }
+
 /* Recorder + results */
 .control-dock-wrapper { display: flex; justify-content: flex-start; margin-top: -6px; }
 .control-dock { display: inline-flex; align-items: center; gap: 10px; padding: 5px 10px 5px 5px; border: 1px solid var(--line); border-radius: 99px; background: rgba(255,255,255,.9); box-shadow: 0 8px 24px rgba(23,23,21,.05); }

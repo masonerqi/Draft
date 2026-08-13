@@ -114,6 +114,28 @@ function renderLucideIcons() {
   }
 }
 
+// Disables a button and swaps its label for a small pulsing "wave" for the
+// duration of an in-flight request, so a slow round trip never reads as an
+// unregistered click — a repeat click while `disabled` is true is dropped by
+// the browser before any handler runs, which is what stops double-submits.
+// Mirrors the pattern already used for auth buttons (templates/auth.html).
+function setButtonLoading(btn, loading) {
+  if (!btn) return;
+  if (loading) {
+    if (!btn.querySelector(".btn-loading-bars")) {
+      const bars = document.createElement("span");
+      bars.className = "btn-loading-bars";
+      bars.innerHTML = "<span></span><span></span><span></span><span></span>";
+      btn.appendChild(bars);
+    }
+    btn.classList.add("is-loading");
+    btn.disabled = true;
+  } else {
+    btn.classList.remove("is-loading");
+    btn.disabled = false;
+  }
+}
+
 // Curated icon choices for the "Create folder" icon grid — all Lucide names,
 // matching every other icon already used across the app.
 const FOLDER_ICONS = [
@@ -969,10 +991,15 @@ window.showFolder = async function (id) {
 
 async function deleteActiveFolder() {
   if (!state.activeFolderId) return;
-  await fetch(`/folders/${state.activeFolderId}`, { method: "DELETE", credentials: "same-origin" });
-  state.activeFolderId = null;
-  await loadFolders();
-  showHome();
+  setButtonLoading(elements.deleteFolderButton, true);
+  try {
+    await fetch(`/folders/${state.activeFolderId}`, { method: "DELETE", credentials: "same-origin" });
+    state.activeFolderId = null;
+    await loadFolders();
+    showHome();
+  } finally {
+    setButtonLoading(elements.deleteFolderButton, false);
+  }
 }
 
 function renderFolderIconPicker() {
@@ -1016,6 +1043,10 @@ async function submitCreateFolder() {
     if (elements.createFolderError) elements.createFolderError.textContent = "Please name your folder.";
     return;
   }
+  // `disabled` (set synchronously below) makes the browser drop any repeat
+  // click before this function runs again, so a spammed button can only
+  // ever have one request in flight at a time.
+  setButtonLoading(elements.createFolderSubmitButton, true);
   try {
     const res = await fetch("/folders", {
       method: "POST",
@@ -1029,9 +1060,15 @@ async function submitCreateFolder() {
       return;
     }
     closeCreateFolderModal();
-    await loadFolders();
+    // The POST response already carries the created folder — apply it
+    // locally instead of paying for a full GET /folders round trip.
+    state.folders.push(data);
+    renderFolderList();
+    renderBulkFolderMenu();
   } catch (error) {
     if (elements.createFolderError) elements.createFolderError.textContent = error.message || "Unable to create folder.";
+  } finally {
+    setButtonLoading(elements.createFolderSubmitButton, false);
   }
 }
 
@@ -1091,8 +1128,15 @@ function renderBulkFolderMenu() {
   });
 }
 
+let folderMoveInFlight = false;
+
 async function moveSelectedSessionsToFolder(folderId) {
-  if (!state.selectedSessionIds.size) return;
+  if (!state.selectedSessionIds.size || folderMoveInFlight) return;
+  // The dropdown's <li> items are re-rendered on every loadFolders() call,
+  // so there's no stable button element to disable — a flag guard fills the
+  // same role as setButtonLoading does for the other folder actions.
+  folderMoveInFlight = true;
+  toggleBulkFolderMenu(false);
   try {
     await fetch("/sessions/folder", {
       method: "POST",
@@ -1103,10 +1147,10 @@ async function moveSelectedSessionsToFolder(folderId) {
   } catch (e) {
     console.warn("Unable to move notes to folder.", e);
   }
-  toggleBulkFolderMenu(false);
   exitSelectMode();
   await Promise.all([loadFolders(), loadHistory()]);
   filterSessions(elements.searchInput.value || "");
+  folderMoveInFlight = false;
 }
 
 async function deleteSelectedSessions() {
