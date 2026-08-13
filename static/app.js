@@ -102,10 +102,17 @@ const elements = {
   bulkFolderMenu: document.getElementById("bulk-folder-menu"),
   bulkCancelButton: document.getElementById("bulk-cancel-btn"),
   bulkDeleteButton: document.getElementById("bulk-delete-btn"),
+  toastSuccess: document.getElementById("toast-success"),
+  toastSuccessText: document.getElementById("toast-success-text"),
   summaryLanguageWrap: document.getElementById("summary-language-wrap"),
   summaryLanguageTrigger: document.getElementById("summary-language-trigger"),
   summaryLanguageMenu: document.getElementById("summary-language-menu"),
   summaryLanguageLabel: document.getElementById("summary-language-label"),
+  deleteFolderModal: document.getElementById("delete-folder-modal"),
+  deleteFolderTitle: document.getElementById("delete-folder-title"),
+  deleteFolderMessage: document.getElementById("delete-folder-message"),
+  deleteFolderCancelButton: document.getElementById("delete-folder-cancel-btn"),
+  deleteFolderConfirmButton: document.getElementById("delete-folder-confirm-btn"),
 };
 
 function renderLucideIcons() {
@@ -134,6 +141,17 @@ function setButtonLoading(btn, loading) {
     btn.classList.remove("is-loading");
     btn.disabled = false;
   }
+}
+
+let toastSuccessTimer = null;
+function showSuccessToast(message) {
+  if (!elements.toastSuccess) return;
+  if (elements.toastSuccessText) elements.toastSuccessText.textContent = message;
+  elements.toastSuccess.classList.add("is-visible");
+  clearTimeout(toastSuccessTimer);
+  toastSuccessTimer = setTimeout(() => {
+    elements.toastSuccess.classList.remove("is-visible");
+  }, 2200);
 }
 
 // Curated icon choices for the "Create folder" icon grid — all Lucide names,
@@ -947,16 +965,55 @@ function renderFolderList() {
   }
   elements.folderList.innerHTML = state.folders
     .map((folder) => `
-      <li>
+      <li class="folder-row">
         <button type="button" class="nav-item folder-nav-item${state.activeFolderId === folder.id ? " active" : ""}" data-folder-id="${folder.id}" onclick="showFolder(${folder.id})">
           <i data-lucide="${escapeHtml(folder.icon)}"></i>
           <span>${escapeHtml(folder.name)}</span>
           ${folder.note_count ? `<span class="badge-red folder-count">${folder.note_count}</span>` : ""}
         </button>
+        <div class="folder-more-wrap dropdown-wrap">
+          <button type="button" class="icon-button folder-more-btn" title="More options" aria-label="More options for ${escapeHtml(folder.name)}">
+            <i data-lucide="more-horizontal"></i>
+          </button>
+          <ul class="dropdown-menu hidden folder-more-menu">
+            <li class="dropdown-option dropdown-option-danger" data-folder-id="${folder.id}">
+              <i data-lucide="trash-2"></i>
+              <span>Delete</span>
+            </li>
+          </ul>
+        </div>
       </li>
     `)
     .join("");
   renderLucideIcons();
+
+  elements.folderList.querySelectorAll(".folder-more-btn").forEach((btn) => {
+    btn.addEventListener("click", (event) => {
+      event.stopPropagation();
+      const menu = btn.nextElementSibling;
+      const wasHidden = menu.classList.contains("hidden");
+      closeAllFolderMenus();
+      if (wasHidden) {
+        menu.classList.remove("hidden");
+        btn.classList.add("is-open");
+      }
+    });
+  });
+
+  elements.folderList.querySelectorAll(".folder-more-menu .dropdown-option").forEach((item) => {
+    item.addEventListener("click", (event) => {
+      event.stopPropagation();
+      closeAllFolderMenus();
+      const id = Number(item.dataset.folderId);
+      const folder = state.folders.find((f) => f.id === id);
+      openDeleteFolderModal(id, folder?.name, null);
+    });
+  });
+}
+
+function closeAllFolderMenus() {
+  document.querySelectorAll(".folder-more-menu").forEach((menu) => menu.classList.add("hidden"));
+  document.querySelectorAll(".folder-more-btn.is-open").forEach((btn) => btn.classList.remove("is-open"));
 }
 
 window.showFolder = async function (id) {
@@ -980,25 +1037,46 @@ window.showFolder = async function (id) {
 
   if (elements.folderViewTitle) elements.folderViewTitle.textContent = folder ? folder.name : "Folder";
 
+  if (elements.folderNotesList) {
+    elements.folderNotesList.innerHTML = `
+      <li class="history-loading">
+        <div class="loading-bar-track"><div class="loading-bar-fill"></div></div>
+        <span>Loading notes…</span>
+      </li>
+    `;
+  }
+
   try {
     const res = await fetch(`/folders/${id}/sessions`, { credentials: "same-origin" });
     const data = await res.json();
+    // Rapidly clicking folder A then folder B fires two overlapping
+    // requests; if A's happens to resolve after B's, rendering it here
+    // unconditionally would show A's notes under B's title. state.activeFolderId
+    // is set synchronously at the top of this function on every call (and
+    // cleared by clearFolderHighlight() when the user navigates elsewhere),
+    // so a mismatch here means a newer call has superseded this one — drop
+    // the stale response instead of rendering it.
+    if (state.activeFolderId !== id) return;
     renderSessionList(elements.folderNotesList, Array.isArray(data) ? data : [], "No notes in this folder yet.");
   } catch (e) {
     console.warn("Unable to load folder notes.", e);
   }
 };
 
-async function deleteActiveFolder() {
-  if (!state.activeFolderId) return;
-  setButtonLoading(elements.deleteFolderButton, true);
+async function deleteFolder(id, btn) {
+  if (!id) return;
+  setButtonLoading(btn, true);
   try {
-    await fetch(`/folders/${state.activeFolderId}`, { method: "DELETE", credentials: "same-origin" });
-    state.activeFolderId = null;
+    await fetch(`/folders/${id}`, { method: "DELETE", credentials: "same-origin" });
     await loadFolders();
-    showHome();
+    // Only bounce to Home if the folder we just deleted is the one currently
+    // open — deleting a different folder from its sidebar "..." menu should
+    // leave whatever view the user is on (Home/Search/another folder) alone.
+    if (state.activeFolderId === id) {
+      showHome();
+    }
   } finally {
-    setButtonLoading(elements.deleteFolderButton, false);
+    setButtonLoading(btn, false);
   }
 }
 
@@ -1034,6 +1112,25 @@ function openCreateFolderModal() {
 
 function closeCreateFolderModal() {
   if (elements.createFolderModal) elements.createFolderModal.classList.add("hidden");
+}
+
+// The pending delete's folder id/trigger button are kept here rather than
+// re-derived from state.activeFolderId at confirm time, since the sidebar
+// "..." menu can trigger this for a folder that isn't the active one.
+let pendingFolderDelete = null;
+
+function openDeleteFolderModal(id, name, triggerButton) {
+  if (!elements.deleteFolderModal) return;
+  pendingFolderDelete = { id, triggerButton };
+  if (elements.deleteFolderTitle) {
+    elements.deleteFolderTitle.textContent = name ? `Delete "${name}"?` : "Delete folder?";
+  }
+  elements.deleteFolderModal.classList.remove("hidden");
+}
+
+function closeDeleteFolderModal() {
+  pendingFolderDelete = null;
+  if (elements.deleteFolderModal) elements.deleteFolderModal.classList.add("hidden");
 }
 
 async function submitCreateFolder() {
@@ -1124,33 +1221,40 @@ function renderBulkFolderMenu() {
     .join("");
   renderLucideIcons();
   elements.bulkFolderMenu.querySelectorAll(".dropdown-option").forEach((item) => {
-    item.addEventListener("click", () => moveSelectedSessionsToFolder(Number(item.dataset.folderId)));
+    item.addEventListener("click", () => moveSelectedSessionsToFolder(Number(item.dataset.folderId), item));
   });
 }
 
 let folderMoveInFlight = false;
 
-async function moveSelectedSessionsToFolder(folderId) {
+async function moveSelectedSessionsToFolder(folderId, itemEl) {
   if (!state.selectedSessionIds.size || folderMoveInFlight) return;
   // The dropdown's <li> items are re-rendered on every loadFolders() call,
   // so there's no stable button element to disable — a flag guard fills the
-  // same role as setButtonLoading does for the other folder actions.
+  // same role as setButtonLoading does for the other folder actions. The
+  // clicked item itself stays put for the length of the request though, so
+  // it can carry a pulsing "in progress" indicator until the save resolves.
   folderMoveInFlight = true;
-  toggleBulkFolderMenu(false);
+  if (itemEl) itemEl.classList.add("is-pulsing");
+  let succeeded = false;
   try {
-    await fetch("/sessions/folder", {
+    const res = await fetch("/sessions/folder", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       credentials: "same-origin",
       body: JSON.stringify({ session_ids: Array.from(state.selectedSessionIds), folder_id: folderId }),
     });
+    succeeded = res.ok;
   } catch (e) {
     console.warn("Unable to move notes to folder.", e);
   }
+  if (itemEl) itemEl.classList.remove("is-pulsing");
+  toggleBulkFolderMenu(false);
   exitSelectMode();
   await Promise.all([loadFolders(), loadHistory()]);
   filterSessions(elements.searchInput.value || "");
   folderMoveInFlight = false;
+  if (succeeded) showSuccessToast("Done");
 }
 
 async function deleteSelectedSessions() {
@@ -1931,9 +2035,29 @@ function initializeEventListeners() {
 
   if (elements.deleteFolderButton) {
     elements.deleteFolderButton.addEventListener("click", () => {
-      if (window.confirm("Delete this folder? Its notes will stay, unfiled.")) {
-        deleteActiveFolder();
+      const folder = state.folders.find((f) => f.id === state.activeFolderId);
+      openDeleteFolderModal(state.activeFolderId, folder?.name, elements.deleteFolderButton);
+    });
+  }
+  if (elements.deleteFolderCancelButton) {
+    elements.deleteFolderCancelButton.addEventListener("click", closeDeleteFolderModal);
+  }
+  if (elements.deleteFolderConfirmButton) {
+    elements.deleteFolderConfirmButton.addEventListener("click", async () => {
+      if (!pendingFolderDelete) return;
+      const { id, triggerButton } = pendingFolderDelete;
+      setButtonLoading(elements.deleteFolderConfirmButton, true);
+      try {
+        await deleteFolder(id, triggerButton);
+      } finally {
+        setButtonLoading(elements.deleteFolderConfirmButton, false);
+        closeDeleteFolderModal();
       }
+    });
+  }
+  if (elements.deleteFolderModal) {
+    elements.deleteFolderModal.addEventListener("click", (event) => {
+      if (event.target === elements.deleteFolderModal) closeDeleteFolderModal();
     });
   }
 
@@ -1958,6 +2082,9 @@ function initializeEventListeners() {
     }
     if (elements.exportWrap && !elements.exportWrap.contains(event.target)) {
       toggleExportMenu(false);
+    }
+    if (!event.target.closest(".folder-more-wrap")) {
+      closeAllFolderMenus();
     }
   });
 }

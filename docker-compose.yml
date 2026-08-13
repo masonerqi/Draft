@@ -6,11 +6,29 @@ services:
     volumes:
       - .:/app:cached
       - ./firebase-credentials.json:/app/firebase-credentials.json:ro
-      # Explicit host file mapping for persistent SQLite DB
-      - ./data/database.db:/app/data/database.db
     environment:
       - SECRET_KEY=dev-secret-key-change-in-prod
       - FIREBASE_SERVICE_ACCOUNT=/app/firebase-credentials.json
-      - DATABASE_PATH=/app/data/database.db
+      - DATABASE_URL=postgresql://postgres:postgres@db:5432/draft_app
       - ADMIN_EMAILS=masonerqi@gmail.com
+    depends_on:
+      db:
+        condition: service_healthy
     restart: unless-stopped
+
+  db:
+    image: postgres:16-alpine
+    environment:
+      - POSTGRES_PASSWORD=postgres
+      - POSTGRES_DB=draft_app
+    volumes:
+      - draft_app_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 2s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+volumes:
+  draft_app_pgdata:
