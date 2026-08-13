@@ -362,7 +362,7 @@ textarea.transcription-textarea:focus { border-color: #C7C5BE; background: #fff;
   .app-shell { display: block; }.sidebar-resizer { display: none; }.sidebar { position: static; height: auto; padding: 14px 16px; border-bottom: 1px solid var(--line); border-right: 0; }.sidebar-top { display: flex; align-items: center; justify-content: space-between; gap: 12px; }.sidebar-section, .sidebar-footer { display: none; }.brand { padding-left: 0; }.sidebar-button { min-height: 36px; }.main-content { padding: 36px 16px; }.topbar { display: block; }.page-title { font-size: 32px; }.page-copy { font-size: 14px; }.home-heading { display: grid; }.home-heading .btn-primary { width: 100%; }.transcript-header { display: block !important; }.status-badge { display: inline-flex !important; margin-top: 14px; }.result-grid { grid-template-columns: 1fr; }.action-row { justify-content: stretch; }.action-row button { flex: 1; }.control-dock-wrapper { justify-content: center; }
 }
 
-.toast-success {
+.toast-success, .toast-danger {
   position: fixed;
   bottom: 28px;
   left: 50%;
@@ -372,7 +372,6 @@ textarea.transcription-textarea:focus { border-color: #C7C5BE; background: #fff;
   gap: 8px;
   padding: 10px 18px;
   border-radius: var(--radius-pill);
-  background: var(--success);
   color: #fff;
   font-size: 13px;
   font-weight: 650;
@@ -382,7 +381,9 @@ textarea.transcription-textarea:focus { border-color: #C7C5BE; background: #fff;
   pointer-events: none;
   transition: opacity .22s ease, transform .22s ease;
 }
-.toast-success i { width: 15px; height: 15px; }
-.toast-success.is-visible { opacity: 1; transform: translate(-50%, 0); }
+.toast-success { background: var(--success); }
+.toast-danger { background: var(--red); }
+.toast-success i, .toast-danger i { width: 15px; height: 15px; }
+.toast-success.is-visible, .toast-danger.is-visible { opacity: 1; transform: translate(-50%, 0); }
 
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .01ms !important; transition-duration: .01ms !important; } }

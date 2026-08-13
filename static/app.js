@@ -104,6 +104,7 @@ const elements = {
   bulkDeleteButton: document.getElementById("bulk-delete-btn"),
   toastSuccess: document.getElementById("toast-success"),
   toastSuccessText: document.getElementById("toast-success-text"),
+  toastDeleting: document.getElementById("toast-deleting"),
   summaryLanguageWrap: document.getElementById("summary-language-wrap"),
   summaryLanguageTrigger: document.getElementById("summary-language-trigger"),
   summaryLanguageMenu: document.getElementById("summary-language-menu"),
@@ -152,6 +153,16 @@ function showSuccessToast(message) {
   toastSuccessTimer = setTimeout(() => {
     elements.toastSuccess.classList.remove("is-visible");
   }, 2200);
+}
+
+// Shown for the duration of a delete request (not on a timer, unlike the
+// success toast) — deleteSession()/deleteSelectedSessions() hide it once
+// the request settles, so it tracks the actual in-flight state.
+function showDeletingToast() {
+  elements.toastDeleting?.classList.add("is-visible");
+}
+function hideDeletingToast() {
+  elements.toastDeleting?.classList.remove("is-visible");
 }
 
 // Curated icon choices for the "Create folder" icon grid — all Lucide names,
@@ -1263,10 +1274,13 @@ async function deleteSelectedSessions() {
   if (!window.confirm(`Delete ${ids.length} note${ids.length > 1 ? "s" : ""}? This can't be undone.`)) {
     return;
   }
+  showDeletingToast();
   try {
     await Promise.all(ids.map((id) => fetch(`/sessions/${id}`, { method: "DELETE", credentials: "same-origin" })));
   } catch (e) {
     console.warn("Unable to delete some notes.", e);
+  } finally {
+    hideDeletingToast();
   }
   if (ids.includes(state.activeSessionId)) resetToInput();
   exitSelectMode();
@@ -1311,7 +1325,12 @@ window.loadSession = async function (id) {
 };
 
 window.deleteSession = async function (id) {
-  await fetch(`/sessions/${id}`, { method: "DELETE", credentials: "same-origin" });
+  showDeletingToast();
+  try {
+    await fetch(`/sessions/${id}`, { method: "DELETE", credentials: "same-origin" });
+  } finally {
+    hideDeletingToast();
+  }
   if (state.activeSessionId === id) resetToInput();
   loadHistory();
   loadFolders();
