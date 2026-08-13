@@ -116,6 +116,26 @@
       errorMessage.classList.toggle("auth-message--success", !isError);
     }
 
+    // Swaps a button's label for a small pulsing "wave" the instant it's
+    // clicked, so a slow network round trip (e.g. a cold-started backend)
+    // never reads as an unregistered click.
+    function setButtonLoading(btn, loading) {
+      if (!btn) return;
+      if (loading) {
+        if (!btn.querySelector(".btn-loading-bars")) {
+          const bars = document.createElement("span");
+          bars.className = "btn-loading-bars";
+          bars.innerHTML = "<span></span><span></span><span></span><span></span>";
+          btn.appendChild(bars);
+        }
+        btn.classList.add("is-loading");
+        btn.disabled = true;
+      } else {
+        btn.classList.remove("is-loading");
+        btn.disabled = false;
+      }
+    }
+
     // Toast-style confirmation after a self-serve account deletion redirects
     // here. Strip the query param so a page refresh doesn't re-show it.
     if (new URLSearchParams(window.location.search).get("deleted") === "1") {
@@ -143,6 +163,7 @@
     if (googleBtn) {
       const googleProvider = new GoogleAuthProvider();
       googleBtn.addEventListener("click", async () => {
+        setButtonLoading(googleBtn, true);
         try {
           const result = await signInWithPopup(auth, googleProvider);
           const token = await result.user.getIdToken();
@@ -163,6 +184,8 @@
         } catch (error) {
           console.error("Google Auth Error:", error);
           setStatus(parseAuthError(error.code) || error.message);
+        } finally {
+          setButtonLoading(googleBtn, false);
         }
       });
     }
@@ -171,8 +194,8 @@
     if (authForm) {
       authForm.addEventListener("submit", async (event) => {
         event.preventDefault();
+        setButtonLoading(submitBtn, true);
         setStatus("");
-        submitBtn.disabled = true;
 
         const email = document.getElementById("email")?.value.trim();
         const password = document.getElementById("password")?.value;
@@ -232,7 +255,7 @@
           console.error("Auth Error:", error);
           setStatus(parseAuthError(error.code) || error.message);
         } finally {
-          submitBtn.disabled = false;
+          setButtonLoading(submitBtn, false);
         }
       });
     }

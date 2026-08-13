@@ -166,6 +166,59 @@
   box-sizing: border-box;
 }
 
+/* Loading state: the exact click frame should already look different, so
+   this swaps the label for a small four-bar "wave" instead of disabling
+   the button with no visible change. Bars use negative animation-delays so
+   they're already mid-cycle (visually varied) on their very first frame. */
+.card--auth .btn-primary,
+#google-btn {
+  position: relative;
+}
+
+.card--auth .btn-primary.is-loading,
+#google-btn.is-loading {
+  color: transparent;
+  cursor: default;
+}
+
+#google-btn.is-loading img {
+  visibility: hidden;
+}
+
+.btn-loading-bars {
+  position: absolute;
+  inset: 0;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+}
+
+.is-loading .btn-loading-bars {
+  display: flex;
+}
+
+.btn-loading-bars span {
+  width: 3px;
+  height: 14px;
+  border-radius: 99px;
+  background: currentColor;
+  animation: authBtnWave 0.85s ease-in-out infinite;
+}
+
+.card--auth .btn-primary .btn-loading-bars span { background: #fff; }
+#google-btn .btn-loading-bars span { background: #344054; }
+
+.btn-loading-bars span:nth-child(1) { animation-delay: -0.6s; }
+.btn-loading-bars span:nth-child(2) { animation-delay: -0.45s; }
+.btn-loading-bars span:nth-child(3) { animation-delay: -0.3s; }
+.btn-loading-bars span:nth-child(4) { animation-delay: -0.15s; }
+
+@keyframes authBtnWave {
+  0%, 100% { transform: scaleY(0.35); opacity: 0.55; }
+  50% { transform: scaleY(1); opacity: 1; }
+}
+
 #google-btn:hover {
   background-color: #f9fafb;
   border-color: #b0b7c3;

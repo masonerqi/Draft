@@ -270,15 +270,10 @@ async function showAppView(user) {
   if (settingsEmail) settingsEmail.textContent = email;
   if (settingsInitials) settingsInitials.textContent = formatInitials(displayName);
 
-  // Load user-specific data sequentially rather than firing every fetch at
-  // once — this environment's SQLite setup (a fresh connection per query, no
-  // pooling/WAL) is prone to "database is locked" errors under concurrent
-  // requests, which was intermittently swallowing the initial /folders call
-  // on page load while a later, solo request (e.g. creating a folder)
-  // succeeded fine.
-  await loadHistory();
-  await loadFolders();
-  await ensureApiKeySaved();
+  // Fired in parallel rather than awaited one at a time — each hop is a
+  // round trip to Postgres, and none of these three depends on another's
+  // result, so serializing them only adds latency without buying anything.
+  await Promise.all([loadHistory(), loadFolders(), ensureApiKeySaved()]);
   showHome();
 }
 
@@ -1110,8 +1105,7 @@ async function moveSelectedSessionsToFolder(folderId) {
   }
   toggleBulkFolderMenu(false);
   exitSelectMode();
-  await loadFolders();
-  await loadHistory();
+  await Promise.all([loadFolders(), loadHistory()]);
   filterSessions(elements.searchInput.value || "");
 }
 
@@ -1128,8 +1122,7 @@ async function deleteSelectedSessions() {
   }
   if (ids.includes(state.activeSessionId)) resetToInput();
   exitSelectMode();
-  await loadHistory();
-  await loadFolders();
+  await Promise.all([loadHistory(), loadFolders()]);
 }
 
 function toggleBulkFolderMenu(forceOpen) {
