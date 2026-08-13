@@ -312,8 +312,8 @@ async function logout() {
     console.warn("Logout failed", error);
   }
   state.currentUser = null;
-  // Redirect to login page
-  window.location.href = "/login";
+  // Redirect to landing page
+  window.location.href = "/";
 }
 
 function startTimer() {

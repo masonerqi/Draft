@@ -1,14 +1,21 @@
-"""Local shadow-tracking of each user's Gemini rate limits.
+"""Local shadow-tracking of Gemini rate limits, per API key.
 
-Google enforces the real quota on the user's API key, server-side — this
-module doesn't enforce anything itself. It estimates request cost before
-calling Gemini, checks that estimate against a rolling-window read of
-`usage_logs`, and reconciles with Gemini's real numbers afterward, purely to
-warn the user before they hit Google's actual wall. It can drift from the
-true state (most likely if the same key is also used outside this app), so a
-real 429 from Gemini is always the source of truth: see
-`record_rejection_by_gemini`, which resyncs the local cooldown/limits toward
-whatever Gemini's error response says.
+Google enforces the real quota on the API key, server-side — this module
+doesn't enforce anything itself. It estimates request cost before calling
+Gemini, checks that estimate against a rolling-window read of `usage_logs`,
+and reconciles with Gemini's real numbers afterward, purely to warn the user
+before they hit Google's actual wall. It can drift from the true state (most
+likely if the same key is also used outside this app), so a real 429 from
+Gemini is always the source of truth: see `record_rejection_by_gemini`,
+which resyncs the local cooldown/limits toward whatever Gemini's error
+response says.
+
+Everything here is keyed by the API key (via database.hash_api_key), not by
+user account, because that's the granularity Google's own enforcement uses.
+A user who holds several keys has genuinely independent budgets, and each
+key's tracked history persists across switches — including switching back to
+a key used earlier, which resumes that key's own usage rather than starting
+it over at zero.
 """
 
 from datetime import datetime, timedelta, timezone
@@ -126,7 +133,7 @@ def _resets_in_seconds(oldest_timestamp, window_seconds):
     return max(0, int(round(window_seconds - elapsed)))
 
 
-def maybe_relax_limit(user_id, dimension, tier="free"):
+def maybe_relax_limit(user_id, key_hash, dimension, tier="free"):
     """Re-tests one tracked dimension that was previously tightened by
     record_rejection_by_gemini. A downward correction is trusted for
     RELAX_AFTER_SECONDS (it might have been exactly right, or Gemini's real
@@ -138,7 +145,7 @@ def maybe_relax_limit(user_id, dimension, tier="free"):
     if dimension not in _DIMENSION_TO_DEFAULT_KEY:
         raise ValueError(f"Unsupported quota dimension: {dimension!r}")
 
-    limits = database.get_quota_limits(user_id, get_default_limits(tier))
+    limits = database.get_quota_limits(user_id, key_hash, get_default_limits(tier))
     corrected_at = _parse_iso(limits.get(f"{dimension}_corrected_at"))
     if not corrected_at:
         return
@@ -148,18 +155,21 @@ def maybe_relax_limit(user_id, dimension, tier="free"):
         return
 
     default_value = get_default_limits(tier)[_DIMENSION_TO_DEFAULT_KEY[dimension]]
-    database.relax_quota_limit(user_id, dimension, default_value)
+    database.relax_quota_limit(user_id, key_hash, dimension, default_value)
 
 
-def check_capacity(user_id, estimated_tokens, tier="free"):
-    """Raises QuotaExceeded if calling Gemini now would push the user over
-    ~90% of their tracked RPM/TPM capacity, or if a Gemini-issued cooldown
-    from a previous real 429 is still active. Returns the snapshot used for
-    the decision when the request is allowed, so the caller can log it."""
+def check_capacity(user_id, api_key, estimated_tokens, tier="free"):
+    """Raises QuotaExceeded if calling Gemini with `api_key` now would push
+    that key over ~90% of its tracked RPM/TPM capacity, or if a
+    Gemini-issued cooldown from a previous real 429 against that same key is
+    still active. Returns the snapshot used for the decision when the
+    request is allowed, so the caller can log it."""
+    key_hash = database.hash_api_key(api_key)
+
     for dimension in _DIMENSION_TO_DEFAULT_KEY:
-        maybe_relax_limit(user_id, dimension, tier)
+        maybe_relax_limit(user_id, key_hash, dimension, tier)
 
-    limits = database.get_quota_limits(user_id, get_default_limits(tier))
+    limits = database.get_quota_limits(user_id, key_hash, get_default_limits(tier))
 
     if limits["cooldown_until"]:
         cooldown_until = _parse_iso(limits["cooldown_until"])
@@ -170,8 +180,8 @@ def check_capacity(user_id, estimated_tokens, tier="free"):
                 "resets_in_seconds": retry_after,
             })
 
-    minute_usage = database.get_usage_window(user_id, "1 minute")
-    day_usage = database.get_usage_window(user_id, "1 day")
+    minute_usage = database.get_usage_window(user_id, key_hash, "1 minute")
+    day_usage = database.get_usage_window(user_id, key_hash, "1 day")
 
     if minute_usage["requests"] + 1 > limits["rpm_limit"] * SAFETY_MARGIN:
         raise QuotaExceeded("rpm", {
@@ -192,21 +202,22 @@ def check_capacity(user_id, estimated_tokens, tier="free"):
     return {"limits": limits, "minute_usage": minute_usage, "day_usage": day_usage}
 
 
-def record_success(user_id, request_type, estimated_tokens, usage_metadata=None):
+def record_success(user_id, api_key, request_type, estimated_tokens, usage_metadata=None):
     """Writes the real token counts from Gemini's usageMetadata (included
     free in every response) instead of the pre-flight estimate, so the next
     rolling-window query reflects actual usage."""
     actual_tokens = getattr(usage_metadata, "total_token_count", None) if usage_metadata else None
     if actual_tokens is None:
         actual_tokens = estimated_tokens
-    database.log_usage(user_id, request_type, "success",
+    database.log_usage(user_id, database.hash_api_key(api_key), request_type, "success",
                         estimated_tokens=estimated_tokens, actual_tokens=actual_tokens)
 
 
-def record_preflight_rejection(user_id, request_type, estimated_tokens):
+def record_preflight_rejection(user_id, api_key, request_type, estimated_tokens):
     """Logged for visibility only — excluded from rolling-window sums, since
     a request rejected before calling Gemini never touched real quota."""
-    database.log_usage(user_id, request_type, "rejected_preflight", estimated_tokens=estimated_tokens)
+    database.log_usage(user_id, database.hash_api_key(api_key), request_type, "rejected_preflight",
+                        estimated_tokens=estimated_tokens)
 
 
 def _dimension_from_violation(violation):
@@ -267,29 +278,31 @@ def _parse_retry_delay(value):
     return None
 
 
-def record_rejection_by_gemini(user_id, request_type, estimated_tokens, parsed_429):
+def record_rejection_by_gemini(user_id, api_key, request_type, estimated_tokens, parsed_429):
     """The authoritative path: Gemini itself said no. Logs the attempt,
     starts a cooldown from RetryInfo if one was given, and tightens whichever
     local limit QuotaFailure blamed — since our assumption for that
-    dimension was evidently too generous."""
-    database.log_usage(user_id, request_type, "rate_limited", estimated_tokens=estimated_tokens)
+    dimension was evidently too generous. All of it is scoped to the key
+    that was rejected; the user's other keys are unaffected."""
+    key_hash = database.hash_api_key(api_key)
+    database.log_usage(user_id, key_hash, request_type, "rate_limited", estimated_tokens=estimated_tokens)
 
     retry_after_seconds = parsed_429.get("retry_after_seconds")
     if retry_after_seconds is not None:
         until = datetime.now(timezone.utc) + timedelta(seconds=retry_after_seconds)
-        database.set_quota_cooldown(user_id, until.strftime("%Y-%m-%d %H:%M:%S"))
+        database.set_quota_cooldown(user_id, key_hash, until.strftime("%Y-%m-%d %H:%M:%S"))
 
     for violation in parsed_429.get("quota_violations", []):
         dimension = _dimension_from_violation(violation)
         if dimension == "rpm_limit":
-            window = database.get_usage_window(user_id, "1 minute")
-            database.update_quota_limit(user_id, "rpm_limit", max(window["requests"], 1))
+            window = database.get_usage_window(user_id, key_hash, "1 minute")
+            database.update_quota_limit(user_id, key_hash, "rpm_limit", max(window["requests"], 1))
         elif dimension == "tpm_limit":
-            window = database.get_usage_window(user_id, "1 minute")
-            database.update_quota_limit(user_id, "tpm_limit", max(window["tokens"], 1))
+            window = database.get_usage_window(user_id, key_hash, "1 minute")
+            database.update_quota_limit(user_id, key_hash, "tpm_limit", max(window["tokens"], 1))
         elif dimension == "rpd_limit":
-            window = database.get_usage_window(user_id, "1 day")
-            database.update_quota_limit(user_id, "rpd_limit", max(window["requests"], 1))
+            window = database.get_usage_window(user_id, key_hash, "1 day")
+            database.update_quota_limit(user_id, key_hash, "rpd_limit", max(window["requests"], 1))
 
 
 def is_rate_limit_error(exc):
@@ -307,12 +320,30 @@ def _dimension_status(limit, used, oldest_timestamp, window_seconds):
     }
 
 
-def compute_quota_status(user_id, tier="free"):
-    """Assembles the GET /api/quota payload: current used/remaining/reset
-    for each of the three dimensions Gemini actually enforces."""
-    limits = database.get_quota_limits(user_id, get_default_limits(tier))
-    minute_usage = database.get_usage_window(user_id, "1 minute")
-    day_usage = database.get_usage_window(user_id, "1 day")
+def compute_quota_status(user_id, api_key, tier="free"):
+    """Assembles the GET /api/quota payload for one API key: current
+    used/remaining/reset for each of the three dimensions Gemini actually
+    enforces.
+
+    `api_key` of None means the user hasn't saved one yet — there is no key
+    whose quota could be described, so this reports an untouched budget at
+    tier defaults without seeding a tracking row for a key that doesn't
+    exist. The payload keeps the same shape either way, since the frontend's
+    quota indicator renders it unconditionally."""
+    if not api_key:
+        defaults = get_default_limits(tier)
+        return {
+            "tier": defaults["tier"],
+            "cooldown_until": None,
+            "rpm": _dimension_status(defaults["rpm"], 0, None, 60),
+            "tpm": _dimension_status(defaults["tpm"], 0, None, 60),
+            "rpd": _dimension_status(defaults["rpd"], 0, None, 86400),
+        }
+
+    key_hash = database.hash_api_key(api_key)
+    limits = database.get_quota_limits(user_id, key_hash, get_default_limits(tier))
+    minute_usage = database.get_usage_window(user_id, key_hash, "1 minute")
+    day_usage = database.get_usage_window(user_id, key_hash, "1 day")
     return {
         "tier": limits["tier"],
         "cooldown_until": limits["cooldown_until"],

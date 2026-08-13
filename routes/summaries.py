@@ -45,9 +45,9 @@ def _model_unavailable_response(exc):
     }), 503
 
 
-def _gemini_rate_limit_response(user_id, request_type, estimated_tokens, exc):
+def _gemini_rate_limit_response(user_id, api_key, request_type, estimated_tokens, exc):
     parsed = quota.parse_gemini_429(exc)
-    quota.record_rejection_by_gemini(user_id, request_type, estimated_tokens, parsed)
+    quota.record_rejection_by_gemini(user_id, api_key, request_type, estimated_tokens, parsed)
     return jsonify({
         "error": "Gemini rejected this request for rate limiting.",
         "retry_after_seconds": parsed["retry_after_seconds"],
@@ -59,7 +59,10 @@ def _gemini_rate_limit_response(user_id, request_type, estimated_tokens, exc):
 @login_required
 def get_quota():
     current_user = get_current_user()
-    return jsonify(quota.compute_quota_status(current_user["id"])), 200
+    from database import get_user_api_key
+
+    user_api_key = get_user_api_key(current_user["id"])
+    return jsonify(quota.compute_quota_status(current_user["id"], user_api_key)), 200
 
 
 @summaries_bp.route("/summarise", methods=["POST"])
@@ -92,9 +95,9 @@ def summarise():
         )
         estimated_tokens = input_tokens + quota.OUTPUT_TOKEN_BUFFER
         try:
-            quota.check_capacity(current_user["id"], estimated_tokens)
+            quota.check_capacity(current_user["id"], user_api_key, estimated_tokens)
         except quota.QuotaExceeded as exc:
-            quota.record_preflight_rejection(current_user["id"], "text", estimated_tokens)
+            quota.record_preflight_rejection(current_user["id"], user_api_key, "text", estimated_tokens)
             return _quota_exceeded_response(exc)
 
         try:
@@ -105,10 +108,10 @@ def summarise():
             if is_model_unavailable_error(e):
                 return _model_unavailable_response(e)
             if quota.is_rate_limit_error(e):
-                return _gemini_rate_limit_response(current_user["id"], "text", estimated_tokens, e)
+                return _gemini_rate_limit_response(current_user["id"], user_api_key, "text", estimated_tokens, e)
             return jsonify({"error": f"Gemini processing failed: {str(e)}"}), 500
 
-        quota.record_success(current_user["id"], "text", estimated_tokens, usage_metadata)
+        quota.record_success(current_user["id"], user_api_key, "text", estimated_tokens, usage_metadata)
         filename = "paste"
         input_type = "transcript"
 
@@ -144,9 +147,9 @@ def summarise():
             estimated_tokens = input_tokens + quota.OUTPUT_TOKEN_BUFFER
 
             try:
-                quota.check_capacity(current_user["id"], estimated_tokens)
+                quota.check_capacity(current_user["id"], user_api_key, estimated_tokens)
             except quota.QuotaExceeded as exc:
-                quota.record_preflight_rejection(current_user["id"], "audio", estimated_tokens)
+                quota.record_preflight_rejection(current_user["id"], user_api_key, "audio", estimated_tokens)
                 return _quota_exceeded_response(exc)
 
             try:
@@ -157,10 +160,10 @@ def summarise():
                 if is_model_unavailable_error(e):
                     return _model_unavailable_response(e)
                 if quota.is_rate_limit_error(e):
-                    return _gemini_rate_limit_response(current_user["id"], "audio", estimated_tokens, e)
+                    return _gemini_rate_limit_response(current_user["id"], user_api_key, "audio", estimated_tokens, e)
                 return jsonify({"error": f"Gemini media processing failed: {str(e)}"}), 500
 
-            quota.record_success(current_user["id"], "audio", estimated_tokens, usage_metadata)
+            quota.record_success(current_user["id"], user_api_key, "audio", estimated_tokens, usage_metadata)
         finally:
             if tmp_path and os.path.exists(tmp_path):
                 os.remove(tmp_path)

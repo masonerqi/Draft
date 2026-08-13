@@ -77,7 +77,11 @@ def create_app(test_config=None):
 
 
 if __name__ == "__main__":
-    # Run development server
     app = create_app()
-    app.run(debug=True, host="0.0.0.0", port=5000)
+    # PORT is injected by container hosts (e.g. Vercel); default to 5000 locally.
+    port = int(os.environ.get("PORT", 5000))
+    # Only enable the interactive debugger/reloader for local development —
+    # never in a deployed container, where it would leak stack traces.
+    debug = os.environ.get("FLASK_DEBUG", "0") == "1"
+    app.run(debug=debug, host="0.0.0.0", port=port)
 

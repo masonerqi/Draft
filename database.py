@@ -1,3 +1,4 @@
+import hashlib
 import os
 import sqlite3
 import json
@@ -13,6 +14,17 @@ if not DB_PATH:
     # IDE run config, debugger), which previously made the resolved DB file
     # inconsistent across runs and made data look like it was disappearing.
     DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "database.db")
+
+
+def hash_api_key(api_key):
+    """Stable per-key identifier for quota tracking. Google enforces quota
+    against the API key itself, so every piece of tracked usage state is
+    keyed by this rather than by user_id — a user may hold several keys and
+    switch between them, and each key's history has to survive the switch.
+    Hashed (not stored raw) because these rows outlive the key's presence in
+    `users.gemini_api_key`; the hash only ever needs to be compared, never
+    reversed."""
+    return hashlib.sha256(api_key.encode("utf-8")).hexdigest()
 
 
 def get_db_connection():
@@ -86,6 +98,7 @@ def init_db():
         CREATE TABLE IF NOT EXISTS usage_logs (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             user_id INTEGER NOT NULL,
+            key_hash TEXT,
             timestamp TEXT NOT NULL,
             request_type TEXT NOT NULL,
             estimated_tokens INTEGER,
@@ -94,22 +107,25 @@ def init_db():
             FOREIGN KEY(user_id) REFERENCES users(id)
         )
     """)
-    cursor.execute("""
-        CREATE INDEX IF NOT EXISTS idx_usage_logs_user_timestamp
-        ON usage_logs(user_id, timestamp)
-    """)
     conn.commit()
 
-    # Per-user/tier quota assumptions, seeded from Google's published
-    # defaults the first time a user is checked (see quota.py) and editable
+    # Per-key/tier quota assumptions, seeded from Google's published defaults
+    # the first time a given API key is checked (see quota.py) and editable
     # directly in this table. cooldown_until holds the authoritative
     # "try again at" time Gemini itself returned via RetryInfo on a real
     # 429 — pre-flight checks defer to it even when the local rolling-window
     # math still looks like it has room, since Gemini's own accounting is
     # the source of truth.
+    #
+    # Keyed by (user_id, key_hash), not user_id alone: Google enforces quota
+    # against the API key, so a user holding several keys has genuinely
+    # independent budgets. One row per key means switching keys — including
+    # switching *back* to a previously-used one — resumes that key's own
+    # history instead of resetting it or inheriting another key's cooldown.
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS quota_limits (
-            user_id INTEGER PRIMARY KEY,
+            user_id INTEGER NOT NULL,
+            key_hash TEXT NOT NULL,
             tier TEXT NOT NULL DEFAULT 'free',
             rpm_limit INTEGER NOT NULL,
             tpm_limit INTEGER NOT NULL,
@@ -119,6 +135,7 @@ def init_db():
             rpm_limit_corrected_at TEXT,
             tpm_limit_corrected_at TEXT,
             rpd_limit_corrected_at TEXT,
+            PRIMARY KEY (user_id, key_hash),
             FOREIGN KEY(user_id) REFERENCES users(id)
         )
     """)
@@ -167,11 +184,109 @@ def init_db():
     # single shared timestamp would conflate "RPM was corrected recently"
     # with "RPD was corrected recently" for the same user.
     cursor.execute("PRAGMA table_info(quota_limits)")
-    quota_columns = [row[1] for row in cursor.fetchall()]
+    quota_table_info = cursor.fetchall()
+    quota_columns = [row[1] for row in quota_table_info]
+    # PRAGMA table_info's last field is the column's 1-based position in the
+    # primary key (0 = not part of it).
+    quota_pk_columns = {row[1] for row in quota_table_info if row[5]}
     for corrected_at_column in ("rpm_limit_corrected_at", "tpm_limit_corrected_at", "rpd_limit_corrected_at"):
         if corrected_at_column not in quota_columns:
             cursor.execute(f"ALTER TABLE quota_limits ADD COLUMN {corrected_at_column} TEXT")
             conn.commit()
+
+    # Attribute historical usage to whichever key each user currently holds.
+    # The key actually in use at the time wasn't recorded before this column
+    # existed, so the current key is the best available guess — and the
+    # conservative one: leaving these NULL would instead make every user's
+    # rolling window look empty, handing out a fresh budget that Google's
+    # side would not honour.
+    cursor.execute("PRAGMA table_info(usage_logs)")
+    usage_columns = [row[1] for row in cursor.fetchall()]
+    if "key_hash" not in usage_columns:
+        cursor.execute("ALTER TABLE usage_logs ADD COLUMN key_hash TEXT")
+        conn.commit()
+        cursor.execute("SELECT id, gemini_api_key FROM users WHERE gemini_api_key IS NOT NULL AND gemini_api_key != ''")
+        for migrating_user_id, api_key in cursor.fetchall():
+            cursor.execute(
+                "UPDATE usage_logs SET key_hash = ? WHERE user_id = ? AND key_hash IS NULL",
+                (hash_api_key(api_key), migrating_user_id)
+            )
+        conn.commit()
+
+    # Rebuild quota_limits from a user_id-keyed shape to the
+    # (user_id, key_hash) one. SQLite can't alter a primary key in place, so
+    # this is the standard create/copy/drop/rename.
+    #
+    # Keyed off the actual primary key rather than the mere presence of a
+    # key_hash column: a database may already carry key_hash while still
+    # being keyed by user_id alone, and that shape is the broken one — it
+    # allows only a single row per user, so a second API key fails on the
+    # primary key constraint.
+    #
+    # Each row needs a key to belong to. An existing key_hash is authoritative
+    # if present; otherwise the user's current key is the best available
+    # guess, for the same reason as the usage_logs backfill above. A row with
+    # neither is dropped, since there's no key for its cooldown/corrections to
+    # meaningfully describe (a fresh row reseeds from tier defaults as soon as
+    # one is saved).
+    if quota_pk_columns != {"user_id", "key_hash"}:
+        existing_key_hash = "q.key_hash" if "key_hash" in quota_columns else "NULL"
+        cursor.execute(f"""
+            SELECT q.user_id, {existing_key_hash}, u.gemini_api_key, q.tier,
+                   q.rpm_limit, q.tpm_limit, q.rpd_limit,
+                   q.cooldown_until, q.updated_at,
+                   q.rpm_limit_corrected_at, q.tpm_limit_corrected_at, q.rpd_limit_corrected_at
+            FROM quota_limits q
+            JOIN users u ON u.id = q.user_id
+        """)
+        migrated_rows = []
+        for migrating_user_id, row_key_hash, api_key, *rest in cursor.fetchall():
+            resolved_key_hash = row_key_hash or (hash_api_key(api_key) if api_key else None)
+            if not resolved_key_hash:
+                continue
+            migrated_rows.append((migrating_user_id, resolved_key_hash, *rest))
+
+        cursor.execute("""
+            CREATE TABLE quota_limits_migrated (
+                user_id INTEGER NOT NULL,
+                key_hash TEXT NOT NULL,
+                tier TEXT NOT NULL DEFAULT 'free',
+                rpm_limit INTEGER NOT NULL,
+                tpm_limit INTEGER NOT NULL,
+                rpd_limit INTEGER NOT NULL,
+                cooldown_until TEXT,
+                updated_at TEXT NOT NULL,
+                rpm_limit_corrected_at TEXT,
+                tpm_limit_corrected_at TEXT,
+                rpd_limit_corrected_at TEXT,
+                PRIMARY KEY (user_id, key_hash),
+                FOREIGN KEY(user_id) REFERENCES users(id)
+            )
+        """)
+        cursor.executemany("""
+            INSERT INTO quota_limits_migrated
+                (user_id, key_hash, tier, rpm_limit, tpm_limit, rpd_limit, cooldown_until, updated_at,
+                 rpm_limit_corrected_at, tpm_limit_corrected_at, rpd_limit_corrected_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, migrated_rows)
+        cursor.execute("DROP TABLE quota_limits")
+        cursor.execute("ALTER TABLE quota_limits_migrated RENAME TO quota_limits")
+        conn.commit()
+
+    # Created after the migrations above, not alongside CREATE TABLE: on a
+    # database that predates key_hash the table already exists, so the
+    # CREATE TABLE is a no-op and the column only appears once the ALTER
+    # has run. Indexing it any earlier fails on exactly the deployments the
+    # migration exists to serve.
+    cursor.execute("""
+        CREATE INDEX IF NOT EXISTS idx_usage_logs_user_key_timestamp
+        ON usage_logs(user_id, key_hash, timestamp)
+    """)
+    # Superseded by the key-scoped index above, which shares its leading
+    # column. Dropped so a migrated database ends up with the same indexes
+    # as a freshly created one.
+    cursor.execute("DROP INDEX IF EXISTS idx_usage_logs_user_timestamp")
+    conn.commit()
 
     conn.close()
 
@@ -573,28 +688,31 @@ def _utcnow_iso():
     return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
 
 
-def log_usage(user_id, request_type, status, estimated_tokens=None, actual_tokens=None):
-    """Records the outcome of one summarise request. Only called once it's
-    known whether Gemini was actually invoked — a request rejected by the
-    local pre-flight check never reaches here, since it never touched real
-    quota."""
+def log_usage(user_id, key_hash, request_type, status, estimated_tokens=None, actual_tokens=None):
+    """Records the outcome of one summarise request against the specific API
+    key that made it. Only called once it's known whether Gemini was
+    actually invoked — a request rejected by the local pre-flight check
+    never reaches here, since it never touched real quota."""
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     cursor.execute("""
-        INSERT INTO usage_logs (user_id, timestamp, request_type, estimated_tokens, actual_tokens, status)
-        VALUES (?, ?, ?, ?, ?, ?)
-    """, (user_id, _utcnow_iso(), request_type, estimated_tokens, actual_tokens, status))
+        INSERT INTO usage_logs (user_id, key_hash, timestamp, request_type, estimated_tokens, actual_tokens, status)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+    """, (user_id, key_hash, _utcnow_iso(), request_type, estimated_tokens, actual_tokens, status))
     conn.commit()
     conn.close()
 
 
-def get_usage_window(user_id, window):
-    """Rolling (not calendar-aligned) usage over the trailing window, summed
-    from actual (reconciled) token counts. Only successful calls count
-    toward RPM/TPM/RPD — a Gemini-side 429 never consumed the quota it was
-    rejected for, so counting it here would double-penalize the user.
-    Also returns the oldest timestamp in the window, which callers use to
-    work out when the window will next free up capacity."""
+def get_usage_window(user_id, key_hash, window):
+    """Rolling (not calendar-aligned) usage for one API key over the trailing
+    window, summed from actual (reconciled) token counts. Scoped to
+    `key_hash` because that's the granularity Google enforces at — usage
+    made with a different key of the same user's is a different budget
+    entirely. Only successful calls count toward RPM/TPM/RPD — a Gemini-side
+    429 never consumed the quota it was rejected for, so counting it here
+    would double-penalize the user. Also returns the oldest timestamp in the
+    window, which callers use to work out when the window will next free up
+    capacity."""
     if window not in ("1 minute", "1 day"):
         raise ValueError(f"Unsupported usage window: {window!r}")
     conn = sqlite3.connect(DB_PATH)
@@ -602,8 +720,9 @@ def get_usage_window(user_id, window):
     cursor.execute(f"""
         SELECT COALESCE(SUM(actual_tokens), 0), COUNT(*), MIN(timestamp)
         FROM usage_logs
-        WHERE user_id = ? AND status = 'success' AND timestamp >= datetime('now', '-{window}')
-    """, (user_id,))
+        WHERE user_id = ? AND key_hash = ? AND status = 'success'
+          AND timestamp >= datetime('now', '-{window}')
+    """, (user_id, key_hash))
     tokens, requests, oldest_timestamp = cursor.fetchone()
     conn.close()
     return {"tokens": tokens, "requests": requests, "oldest_timestamp": oldest_timestamp}
@@ -634,25 +753,26 @@ def cleanup_old_usage_logs(batch_size=500):
     return total_deleted
 
 
-def get_quota_limits(user_id, defaults):
-    """Returns the user's tracked RPM/TPM/RPD limits, seeding them from
-    `defaults` (Google's published free-tier numbers for the model in use)
-    on first access. Stored per-user so different tiers/models can carry
-    different assumptions."""
+def get_quota_limits(user_id, key_hash, defaults):
+    """Returns the tracked RPM/TPM/RPD limits for one of the user's API keys,
+    seeding them from `defaults` (Google's published free-tier numbers for
+    the model in use) the first time that key is seen. Stored per key, so
+    each key a user holds carries its own limits, cooldown, and
+    corrections."""
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     cursor.execute(
         "SELECT tier, rpm_limit, tpm_limit, rpd_limit, cooldown_until, "
         "rpm_limit_corrected_at, tpm_limit_corrected_at, rpd_limit_corrected_at "
-        "FROM quota_limits WHERE user_id = ?",
-        (user_id,)
+        "FROM quota_limits WHERE user_id = ? AND key_hash = ?",
+        (user_id, key_hash)
     )
     row = cursor.fetchone()
     if row is None:
         cursor.execute("""
-            INSERT INTO quota_limits (user_id, tier, rpm_limit, tpm_limit, rpd_limit, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?)
-        """, (user_id, defaults["tier"], defaults["rpm"], defaults["tpm"], defaults["rpd"], _utcnow_iso()))
+            INSERT INTO quota_limits (user_id, key_hash, tier, rpm_limit, tpm_limit, rpd_limit, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        """, (user_id, key_hash, defaults["tier"], defaults["rpm"], defaults["tpm"], defaults["rpd"], _utcnow_iso()))
         conn.commit()
         conn.close()
         return {"tier": defaults["tier"], "rpm_limit": defaults["rpm"], "tpm_limit": defaults["tpm"],
@@ -663,7 +783,7 @@ def get_quota_limits(user_id, defaults):
             "rpm_limit_corrected_at": row[5], "tpm_limit_corrected_at": row[6], "rpd_limit_corrected_at": row[7]}
 
 
-def update_quota_limit(user_id, dimension, new_limit):
+def update_quota_limit(user_id, key_hash, dimension, new_limit):
     """Tightens (or otherwise corrects) one tracked dimension after Gemini's
     own QuotaFailure told us our assumption for it was wrong. Stamps that
     dimension's `_corrected_at` so maybe_relax_limit (see quota.py) knows
@@ -674,14 +794,15 @@ def update_quota_limit(user_id, dimension, new_limit):
     cursor = conn.cursor()
     now = _utcnow_iso()
     cursor.execute(
-        f"UPDATE quota_limits SET {dimension} = ?, updated_at = ?, {dimension}_corrected_at = ? WHERE user_id = ?",
-        (new_limit, now, now, user_id)
+        f"UPDATE quota_limits SET {dimension} = ?, updated_at = ?, {dimension}_corrected_at = ? "
+        "WHERE user_id = ? AND key_hash = ?",
+        (new_limit, now, now, user_id, key_hash)
     )
     conn.commit()
     conn.close()
 
 
-def relax_quota_limit(user_id, dimension, new_limit):
+def relax_quota_limit(user_id, key_hash, dimension, new_limit):
     """Resets a previously-tightened dimension back toward its tier default.
     Clears `_corrected_at` for that dimension rather than re-stamping it, so
     this reset isn't itself mistaken for a fresh downward correction — the
@@ -691,34 +812,52 @@ def relax_quota_limit(user_id, dimension, new_limit):
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     cursor.execute(
-        f"UPDATE quota_limits SET {dimension} = ?, updated_at = ?, {dimension}_corrected_at = NULL WHERE user_id = ?",
-        (new_limit, _utcnow_iso(), user_id)
+        f"UPDATE quota_limits SET {dimension} = ?, updated_at = ?, {dimension}_corrected_at = NULL "
+        "WHERE user_id = ? AND key_hash = ?",
+        (new_limit, _utcnow_iso(), user_id, key_hash)
     )
     conn.commit()
     conn.close()
 
 
 def get_all_quota_limits():
-    """Admin view: every user alongside their tracked quota limits. Uses a
-    LEFT JOIN because quota_limits rows are only seeded lazily on a user's
-    first summarise request — a user who has never triggered one yet still
-    shows up here, with every quota field as None."""
+    """Admin view: every user alongside the tracked quota limits for each API
+    key they've used, one row per (user, key). Uses a LEFT JOIN because
+    quota_limits rows are only seeded lazily on a key's first summarise
+    request — a user who has never triggered one yet still shows up here,
+    with every quota field as None. `is_active_key` marks the row for the
+    key the user currently has saved, which is the one the admin PATCH
+    endpoint targets; older keys remain listed so their retained history is
+    visible."""
     conn = get_db_connection()
     rows = conn.execute("""
-        SELECT u.id AS user_id, u.username, u.name,
+        SELECT u.id AS user_id, u.username, u.name, q.key_hash,
                q.tier, q.rpm_limit, q.tpm_limit, q.rpd_limit, q.cooldown_until,
                q.rpm_limit_corrected_at, q.tpm_limit_corrected_at, q.rpd_limit_corrected_at,
                q.updated_at
         FROM users u
         LEFT JOIN quota_limits q ON q.user_id = u.id
-        ORDER BY u.id
+        ORDER BY u.id, q.updated_at
     """).fetchall()
+    active_hashes = {
+        row["id"]: hash_api_key(row["gemini_api_key"])
+        for row in conn.execute(
+            "SELECT id, gemini_api_key FROM users WHERE gemini_api_key IS NOT NULL AND gemini_api_key != ''"
+        ).fetchall()
+    }
     conn.close()
-    return [dict(row) for row in rows]
+    result = []
+    for row in rows:
+        entry = dict(row)
+        entry["is_active_key"] = (
+            entry["key_hash"] is not None and active_hashes.get(entry["user_id"]) == entry["key_hash"]
+        )
+        result.append(entry)
+    return result
 
 
-def set_quota_tier(user_id, tier):
-    """Updates only the display label on a user's quota row. Enforcement
+def set_quota_tier(user_id, key_hash, tier):
+    """Updates only the display label on one key's quota row. Enforcement
     (check_capacity/compute_quota_status in quota.py) reads the numeric
     rpm/tpm/rpd_limit columns directly and never re-derives them from this
     column, so changing it alone does not change what a user can do —
@@ -727,8 +866,8 @@ def set_quota_tier(user_id, tier):
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     cursor.execute(
-        "UPDATE quota_limits SET tier = ?, updated_at = ? WHERE user_id = ?",
-        (tier, _utcnow_iso(), user_id)
+        "UPDATE quota_limits SET tier = ?, updated_at = ? WHERE user_id = ? AND key_hash = ?",
+        (tier, _utcnow_iso(), user_id, key_hash)
     )
     conn.commit()
     conn.close()
@@ -752,15 +891,17 @@ def start_usage_log_cleanup_thread(interval_seconds=3600):
     return thread
 
 
-def set_quota_cooldown(user_id, until_iso):
+def set_quota_cooldown(user_id, key_hash, until_iso):
     """Stores Gemini's authoritative RetryInfo.retryDelay-derived "try again
     at" time so subsequent pre-flight checks defer to it even if the local
-    rolling-window math still looks like it has room."""
+    rolling-window math still looks like it has room. Scoped to the key that
+    was actually told to back off — another key of the same user's is a
+    separate budget and isn't under this cooldown."""
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     cursor.execute(
-        "UPDATE quota_limits SET cooldown_until = ?, updated_at = ? WHERE user_id = ?",
-        (until_iso, _utcnow_iso(), user_id)
+        "UPDATE quota_limits SET cooldown_until = ?, updated_at = ? WHERE user_id = ? AND key_hash = ?",
+        (until_iso, _utcnow_iso(), user_id, key_hash)
     )
     conn.commit()
     conn.close()

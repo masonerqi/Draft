@@ -57,3 +57,20 @@ When you're done:
 ```bash
 deactivate
 ```
+
+## Deploying (Vercel — Container preset)
+
+This repo has a [Dockerfile](Dockerfile), so Vercel will detect it and offer **Container** as the application preset — use that, with root directory `./`.
+
+Set these environment variables in the Vercel project settings:
+
+| Variable | Required | Notes |
+| --- | --- | --- |
+| `SECRET_KEY` | Yes | Flask session signing key. Don't use the dev default in production. |
+| `ADMIN_EMAILS` | Yes | Comma-separated list of admin emails. |
+| `FIREBASE_PROJECT_ID` | Yes (for login) | Your Firebase project id. |
+| `FIREBASE_SERVICE_ACCOUNT_JSON` | Yes (for login) | The full contents of your Firebase service account JSON, pasted as-is. Used instead of a file path since `firebase-credentials.json` is gitignored and never reaches the built image. |
+| `DATABASE_PATH` | No | Defaults to `data/database.db` inside the container. |
+| `PORT` | No | Vercel injects this; the app binds to it automatically. |
+
+**Known limitation:** the app stores data in a local SQLite file. Vercel's container filesystem is ephemeral, so data written at runtime (accounts, quota history, saved summaries) will not survive a redeploy or restart. This is fine for a demo/preview deploy; if you need durable storage, move to a hosted database (e.g. Postgres) before relying on this in production.

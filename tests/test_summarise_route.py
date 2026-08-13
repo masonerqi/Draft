@@ -61,10 +61,11 @@ def _login(client, user_id):
 def test_preflight_rejects_before_calling_gemini_when_rpm_exhausted(db_path, user_id, monkeypatch):
     database.set_user_api_key(user_id, "fake-gemini-key")
 
-    limits = database.get_quota_limits(user_id, quota.get_default_limits())
+    key_hash = database.hash_api_key("fake-gemini-key")
+    limits = database.get_quota_limits(user_id, key_hash, quota.get_default_limits())
     allowed = int(limits["rpm_limit"] * quota.SAFETY_MARGIN)
     for _ in range(allowed):
-        database.log_usage(user_id, "text", "success", estimated_tokens=50, actual_tokens=50)
+        database.log_usage(user_id, key_hash, "text", "success", estimated_tokens=50, actual_tokens=50)
 
     def fail_if_called(*args, **kwargs):
         raise AssertionError("Gemini must not be called once local RPM capacity is exhausted")
@@ -107,7 +108,7 @@ def test_successful_summarise_reconciles_with_real_usage_metadata(db_path, user_
     res = client.post("/summarise", data={"transcript": "hello world"})
 
     assert res.status_code == 200
-    window = database.get_usage_window(user_id, "1 minute")
+    window = database.get_usage_window(user_id, database.hash_api_key("fake-gemini-key"), "1 minute")
     # The estimate (20 + OUTPUT_TOKEN_BUFFER) is discarded once Gemini's own
     # usageMetadata is available — the log reflects the real number.
     assert window["tokens"] == 777
@@ -145,5 +146,5 @@ def test_gemini_429_passthrough_starts_a_cooldown(db_path, user_id, monkeypatch)
     body = res.get_json()
     assert body["retry_after_seconds"] == 5
 
-    limits = database.get_quota_limits(user_id, quota.get_default_limits())
+    limits = database.get_quota_limits(user_id, database.hash_api_key("fake-gemini-key"), quota.get_default_limits())
     assert limits["cooldown_until"] is not None

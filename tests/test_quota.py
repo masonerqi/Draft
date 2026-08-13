@@ -6,16 +6,26 @@ import pytest
 import database
 import quota
 
+# Two distinct Gemini API keys belonging to the same user. Quota is tracked
+# per key (Google enforces it there), so these address independent budgets.
+KEY_A = "AIza-test-key-a"
+KEY_B = "AIza-test-key-b"
 
-def _insert_usage_at(user_id, timestamp, request_type="text", status="success", estimated_tokens=10, actual_tokens=10):
+
+def _hash(api_key):
+    return database.hash_api_key(api_key)
+
+
+def _insert_usage_at(user_id, timestamp, api_key=KEY_A, request_type="text", status="success",
+                     estimated_tokens=10, actual_tokens=10):
     """Inserts a usage_logs row at an explicit timestamp — unlike
     database.log_usage (always "now"), so tests can put usage inside the
     1-day RPD window while keeping it outside the 1-minute RPM/TPM window."""
     conn = sqlite3.connect(database.DB_PATH)
     conn.execute(
-        "INSERT INTO usage_logs (user_id, timestamp, request_type, estimated_tokens, actual_tokens, status) "
-        "VALUES (?, ?, ?, ?, ?, ?)",
-        (user_id, timestamp, request_type, estimated_tokens, actual_tokens, status),
+        "INSERT INTO usage_logs (user_id, key_hash, timestamp, request_type, estimated_tokens, actual_tokens, status) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (user_id, _hash(api_key), timestamp, request_type, estimated_tokens, actual_tokens, status),
     )
     conn.commit()
     conn.close()
@@ -24,36 +34,37 @@ def _insert_usage_at(user_id, timestamp, request_type="text", status="success", 
 # --- Pre-flight rejection when estimate exceeds remaining capacity --------
 
 def test_check_capacity_allows_a_fresh_user(db_path, user_id):
-    result = quota.check_capacity(user_id, estimated_tokens=1000)
+    result = quota.check_capacity(user_id, KEY_A, estimated_tokens=1000)
     assert result["limits"]["rpm_limit"] == quota.get_default_limits()["rpm"]
 
 
 def test_check_capacity_rejects_when_rpm_would_be_exceeded(db_path, user_id):
-    limits = database.get_quota_limits(user_id, quota.get_default_limits())
+    limits = database.get_quota_limits(user_id, _hash(KEY_A), quota.get_default_limits())
     allowed_requests = int(limits["rpm_limit"] * quota.SAFETY_MARGIN)
     for _ in range(allowed_requests):
-        database.log_usage(user_id, "text", "success", estimated_tokens=100, actual_tokens=100)
+        database.log_usage(user_id, _hash(KEY_A), "text", "success", estimated_tokens=100, actual_tokens=100)
 
     with pytest.raises(quota.QuotaExceeded) as exc_info:
-        quota.check_capacity(user_id, estimated_tokens=100)
+        quota.check_capacity(user_id, KEY_A, estimated_tokens=100)
 
     assert exc_info.value.dimension == "rpm"
     assert exc_info.value.detail["resets_in_seconds"] >= 0
 
 
 def test_check_capacity_rejects_when_tpm_would_be_exceeded(db_path, user_id):
-    limits = database.get_quota_limits(user_id, quota.get_default_limits())
+    limits = database.get_quota_limits(user_id, _hash(KEY_A), quota.get_default_limits())
     tpm_ceiling = int(limits["tpm_limit"] * quota.SAFETY_MARGIN)
-    database.log_usage(user_id, "audio", "success", estimated_tokens=tpm_ceiling, actual_tokens=tpm_ceiling)
+    database.log_usage(user_id, _hash(KEY_A), "audio", "success",
+                       estimated_tokens=tpm_ceiling, actual_tokens=tpm_ceiling)
 
     with pytest.raises(quota.QuotaExceeded) as exc_info:
-        quota.check_capacity(user_id, estimated_tokens=1000)
+        quota.check_capacity(user_id, KEY_A, estimated_tokens=1000)
 
     assert exc_info.value.dimension == "tpm"
 
 
 def test_check_capacity_rejects_when_rpd_would_be_exceeded(db_path, user_id):
-    limits = database.get_quota_limits(user_id, quota.get_default_limits())
+    limits = database.get_quota_limits(user_id, _hash(KEY_A), quota.get_default_limits())
     allowed_requests = int(limits["rpd_limit"] * quota.SAFETY_MARGIN)
     # Backdated by 5 minutes so these land inside the 1-day RPD window but
     # outside the 1-minute RPM/TPM window — otherwise the (much lower) RPM
@@ -63,30 +74,30 @@ def test_check_capacity_rejects_when_rpd_would_be_exceeded(db_path, user_id):
         _insert_usage_at(user_id, five_minutes_ago)
 
     with pytest.raises(quota.QuotaExceeded) as exc_info:
-        quota.check_capacity(user_id, estimated_tokens=10)
+        quota.check_capacity(user_id, KEY_A, estimated_tokens=10)
 
     assert exc_info.value.dimension == "rpd"
 
 
 def test_check_capacity_defers_to_an_active_gemini_cooldown(db_path, user_id):
-    database.get_quota_limits(user_id, quota.get_default_limits())
+    database.get_quota_limits(user_id, _hash(KEY_A), quota.get_default_limits())
     until = (datetime.now(timezone.utc) + timedelta(seconds=30)).strftime("%Y-%m-%d %H:%M:%S")
-    database.set_quota_cooldown(user_id, until)
+    database.set_quota_cooldown(user_id, _hash(KEY_A), until)
 
     with pytest.raises(quota.QuotaExceeded) as exc_info:
-        quota.check_capacity(user_id, estimated_tokens=10)
+        quota.check_capacity(user_id, KEY_A, estimated_tokens=10)
 
     assert exc_info.value.dimension == "cooldown"
     assert exc_info.value.detail["resets_in_seconds"] > 0
 
 
 def test_check_capacity_ignores_an_expired_cooldown(db_path, user_id):
-    database.get_quota_limits(user_id, quota.get_default_limits())
+    database.get_quota_limits(user_id, _hash(KEY_A), quota.get_default_limits())
     expired = (datetime.now(timezone.utc) - timedelta(seconds=5)).strftime("%Y-%m-%d %H:%M:%S")
-    database.set_quota_cooldown(user_id, expired)
+    database.set_quota_cooldown(user_id, _hash(KEY_A), expired)
 
     # Should not raise — the cooldown is in the past.
-    quota.check_capacity(user_id, estimated_tokens=10)
+    quota.check_capacity(user_id, KEY_A, estimated_tokens=10)
 
 
 # --- Counter reconciliation after a real Gemini call -----------------------
@@ -95,24 +106,24 @@ def test_record_success_writes_actual_tokens_not_the_estimate(db_path, user_id):
     class FakeUsageMetadata:
         total_token_count = 4321
 
-    quota.record_success(user_id, "text", estimated_tokens=9999, usage_metadata=FakeUsageMetadata())
+    quota.record_success(user_id, KEY_A, "text", estimated_tokens=9999, usage_metadata=FakeUsageMetadata())
 
-    window = database.get_usage_window(user_id, "1 minute")
+    window = database.get_usage_window(user_id, _hash(KEY_A), "1 minute")
     assert window["tokens"] == 4321
     assert window["requests"] == 1
 
 
 def test_record_success_falls_back_to_estimate_without_usage_metadata(db_path, user_id):
-    quota.record_success(user_id, "audio", estimated_tokens=2500, usage_metadata=None)
+    quota.record_success(user_id, KEY_A, "audio", estimated_tokens=2500, usage_metadata=None)
 
-    window = database.get_usage_window(user_id, "1 minute")
+    window = database.get_usage_window(user_id, _hash(KEY_A), "1 minute")
     assert window["tokens"] == 2500
 
 
 def test_preflight_rejection_is_excluded_from_rolling_window(db_path, user_id):
-    quota.record_preflight_rejection(user_id, "text", estimated_tokens=5000)
+    quota.record_preflight_rejection(user_id, KEY_A, "text", estimated_tokens=5000)
 
-    window = database.get_usage_window(user_id, "1 minute")
+    window = database.get_usage_window(user_id, _hash(KEY_A), "1 minute")
     assert window["requests"] == 0
     assert window["tokens"] == 0
 
@@ -187,7 +198,7 @@ def test_check_capacity_rejects_at_90_percent_of_corrected_rpd(db_path, user_id)
         _insert_usage_at(user_id, five_minutes_ago)
 
     with pytest.raises(quota.QuotaExceeded) as exc_info:
-        quota.check_capacity(user_id, estimated_tokens=10)
+        quota.check_capacity(user_id, KEY_A, estimated_tokens=10)
 
     assert exc_info.value.dimension == "rpd"
 
@@ -198,47 +209,48 @@ def test_check_capacity_allows_below_90_percent_of_corrected_rpd(db_path, user_i
         _insert_usage_at(user_id, five_minutes_ago)
 
     # Should not raise.
-    quota.check_capacity(user_id, estimated_tokens=10)
+    quota.check_capacity(user_id, KEY_A, estimated_tokens=10)
 
 
 # --- Upward drift-recovery (maybe_relax_limit) ------------------------------
 
 def test_maybe_relax_limit_resets_a_stale_correction_to_the_tier_default(db_path, user_id):
-    database.get_quota_limits(user_id, quota.get_default_limits())
-    database.update_quota_limit(user_id, "rpd_limit", 3)
+    database.get_quota_limits(user_id, _hash(KEY_A), quota.get_default_limits())
+    database.update_quota_limit(user_id, _hash(KEY_A), "rpd_limit", 3)
 
     stale = (datetime.now(timezone.utc) - timedelta(hours=25)).strftime("%Y-%m-%d %H:%M:%S")
     conn = sqlite3.connect(database.DB_PATH)
-    conn.execute("UPDATE quota_limits SET rpd_limit_corrected_at = ? WHERE user_id = ?", (stale, user_id))
+    conn.execute("UPDATE quota_limits SET rpd_limit_corrected_at = ? WHERE user_id = ? AND key_hash = ?",
+                 (stale, user_id, _hash(KEY_A)))
     conn.commit()
     conn.close()
 
-    quota.maybe_relax_limit(user_id, "rpd_limit")
+    quota.maybe_relax_limit(user_id, _hash(KEY_A), "rpd_limit")
 
-    limits = database.get_quota_limits(user_id, quota.get_default_limits())
+    limits = database.get_quota_limits(user_id, _hash(KEY_A), quota.get_default_limits())
     assert limits["rpd_limit"] == quota.get_default_limits()["rpd"]
     assert limits["rpd_limit_corrected_at"] is None
 
 
 def test_maybe_relax_limit_leaves_a_recent_correction_alone(db_path, user_id):
-    database.get_quota_limits(user_id, quota.get_default_limits())
-    database.update_quota_limit(user_id, "rpd_limit", 3)
+    database.get_quota_limits(user_id, _hash(KEY_A), quota.get_default_limits())
+    database.update_quota_limit(user_id, _hash(KEY_A), "rpd_limit", 3)
 
-    quota.maybe_relax_limit(user_id, "rpd_limit")
+    quota.maybe_relax_limit(user_id, _hash(KEY_A), "rpd_limit")
 
-    limits = database.get_quota_limits(user_id, quota.get_default_limits())
+    limits = database.get_quota_limits(user_id, _hash(KEY_A), quota.get_default_limits())
     assert limits["rpd_limit"] == 3
     assert limits["rpd_limit_corrected_at"] is not None
 
 
 def test_record_rejection_by_gemini_starts_cooldown_and_tightens_limit(db_path, user_id):
-    database.get_quota_limits(user_id, quota.get_default_limits())
-    database.log_usage(user_id, "text", "success", estimated_tokens=100, actual_tokens=100)
+    database.get_quota_limits(user_id, _hash(KEY_A), quota.get_default_limits())
+    database.log_usage(user_id, _hash(KEY_A), "text", "success", estimated_tokens=100, actual_tokens=100)
 
     parsed = quota.parse_gemini_429(_body_as_error())
-    quota.record_rejection_by_gemini(user_id, "text", estimated_tokens=100, parsed_429=parsed)
+    quota.record_rejection_by_gemini(user_id, KEY_A, "text", estimated_tokens=100, parsed_429=parsed)
 
-    limits = database.get_quota_limits(user_id, quota.get_default_limits())
+    limits = database.get_quota_limits(user_id, _hash(KEY_A), quota.get_default_limits())
     assert limits["cooldown_until"] is not None
     # Tightened to the single successful request observed so far, since
     # Gemini said our RPM assumption was too generous.
@@ -247,3 +259,86 @@ def test_record_rejection_by_gemini_starts_cooldown_and_tightens_limit(db_path, 
 
 def _body_as_error():
     return FakeGeminiClientError(_mocked_429_body())
+
+
+# --- Per-key independence -------------------------------------------------
+
+def test_usage_is_tracked_separately_per_key(db_path, user_id):
+    for _ in range(3):
+        quota.record_success(user_id, KEY_A, "text", estimated_tokens=100, usage_metadata=None)
+    quota.record_success(user_id, KEY_B, "text", estimated_tokens=100, usage_metadata=None)
+
+    assert database.get_usage_window(user_id, _hash(KEY_A), "1 minute")["requests"] == 3
+    assert database.get_usage_window(user_id, _hash(KEY_B), "1 minute")["requests"] == 1
+
+
+def test_switching_back_to_an_earlier_key_resumes_its_own_usage(db_path, user_id):
+    # The reported scenario: key A is driven up to its RPD ceiling, the user
+    # switches to a fresh key B, then switches back to A. A's spent budget
+    # must still be there — Google's side never forgot it.
+    five_minutes_ago = (datetime.now(timezone.utc) - timedelta(minutes=5)).strftime("%Y-%m-%d %H:%M:%S")
+    rpd_ceiling = int(quota.get_default_limits()["rpd"] * quota.SAFETY_MARGIN)
+    for _ in range(rpd_ceiling):
+        _insert_usage_at(user_id, five_minutes_ago, api_key=KEY_A)
+
+    with pytest.raises(quota.QuotaExceeded) as exc_info:
+        quota.check_capacity(user_id, KEY_A, estimated_tokens=10)
+    assert exc_info.value.dimension == "rpd"
+
+    # Key B is a separate budget and has room.
+    quota.check_capacity(user_id, KEY_B, estimated_tokens=10)
+    _insert_usage_at(user_id, five_minutes_ago, api_key=KEY_B)
+
+    # Back to key A — still exhausted, not reset to zero.
+    with pytest.raises(quota.QuotaExceeded) as exc_info:
+        quota.check_capacity(user_id, KEY_A, estimated_tokens=10)
+    assert exc_info.value.dimension == "rpd"
+
+    # ...and key B still only carries its own single request.
+    assert database.get_usage_window(user_id, _hash(KEY_B), "1 day")["requests"] == 1
+
+
+def test_cooldown_on_one_key_does_not_block_another(db_path, user_id):
+    database.get_quota_limits(user_id, _hash(KEY_A), quota.get_default_limits())
+    until = (datetime.now(timezone.utc) + timedelta(seconds=30)).strftime("%Y-%m-%d %H:%M:%S")
+    database.set_quota_cooldown(user_id, _hash(KEY_A), until)
+
+    with pytest.raises(quota.QuotaExceeded):
+        quota.check_capacity(user_id, KEY_A, estimated_tokens=10)
+
+    # Key B was never told to back off.
+    quota.check_capacity(user_id, KEY_B, estimated_tokens=10)
+
+
+def test_gemini_correction_applies_only_to_the_rejected_key(db_path, user_id):
+    database.get_quota_limits(user_id, _hash(KEY_A), quota.get_default_limits())
+    database.get_quota_limits(user_id, _hash(KEY_B), quota.get_default_limits())
+    database.log_usage(user_id, _hash(KEY_A), "text", "success", estimated_tokens=100, actual_tokens=100)
+
+    parsed = quota.parse_gemini_429(_body_as_error())
+    quota.record_rejection_by_gemini(user_id, KEY_A, "text", estimated_tokens=100, parsed_429=parsed)
+
+    assert database.get_quota_limits(user_id, _hash(KEY_A), quota.get_default_limits())["rpm_limit"] == 1
+    key_b_limits = database.get_quota_limits(user_id, _hash(KEY_B), quota.get_default_limits())
+    assert key_b_limits["rpm_limit"] == quota.get_default_limits()["rpm"]
+    assert key_b_limits["cooldown_until"] is None
+
+
+def test_compute_quota_status_is_scoped_to_the_given_key(db_path, user_id):
+    for _ in range(2):
+        quota.record_success(user_id, KEY_A, "text", estimated_tokens=100, usage_metadata=None)
+
+    assert quota.compute_quota_status(user_id, KEY_A)["rpd"]["used"] == 2
+    assert quota.compute_quota_status(user_id, KEY_B)["rpd"]["used"] == 0
+
+
+def test_compute_quota_status_without_a_key_reports_an_untouched_budget(db_path, user_id):
+    status = quota.compute_quota_status(user_id, None)
+
+    assert status["rpd"]["used"] == 0
+    assert status["rpd"]["limit"] == quota.get_default_limits()["rpd"]
+    assert status["cooldown_until"] is None
+    # No tracking row should have been seeded for a key that doesn't exist.
+    conn = sqlite3.connect(database.DB_PATH)
+    assert conn.execute("SELECT COUNT(*) FROM quota_limits WHERE user_id = ?", (user_id,)).fetchone()[0] == 0
+    conn.close()

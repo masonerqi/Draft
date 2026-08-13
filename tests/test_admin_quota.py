@@ -39,6 +39,7 @@ def test_logged_out_request_requires_auth(db_path):
 
 def test_admin_can_list_and_update_quota_limits(db_path, user_id, monkeypatch):
     monkeypatch.setattr("routes.utils._ADMIN_EMAILS", {"quota-test@example.com"})
+    database.set_user_api_key(user_id, "fake-gemini-key")
 
     client = _client(db_path)
     _login(client, user_id)
@@ -57,13 +58,44 @@ def test_admin_can_list_and_update_quota_limits(db_path, user_id, monkeypatch):
 
     # The override must clear rpd_limit_corrected_at, otherwise
     # maybe_relax_limit would eventually reset it back to TIER_DEFAULTS.
-    limits = database.get_quota_limits(user_id, quota.get_default_limits())
+    limits = database.get_quota_limits(user_id, database.hash_api_key("fake-gemini-key"), quota.get_default_limits())
     assert limits["rpd_limit"] == 20
     assert limits["rpd_limit_corrected_at"] is None
 
 
+def test_admin_update_requires_the_user_to_have_an_api_key(db_path, user_id, monkeypatch):
+    # Quota rows are per key, so there's nothing to edit until the user has
+    # saved one.
+    monkeypatch.setattr("routes.utils._ADMIN_EMAILS", {"quota-test@example.com"})
+
+    client = _client(db_path)
+    _login(client, user_id)
+
+    res = client.patch(f"/api/admin/quota-limits/{user_id}", json={"rpd_limit": 20})
+    assert res.status_code == 400
+    assert "per key" in res.get_json()["error"]
+
+
+def test_admin_listing_marks_the_active_key(db_path, user_id, monkeypatch):
+    monkeypatch.setattr("routes.utils._ADMIN_EMAILS", {"quota-test@example.com"})
+    database.get_quota_limits(user_id, database.hash_api_key("old-key"), quota.get_default_limits())
+    database.get_quota_limits(user_id, database.hash_api_key("new-key"), quota.get_default_limits())
+    database.set_user_api_key(user_id, "new-key")
+
+    client = _client(db_path)
+    _login(client, user_id)
+
+    listing = client.get("/api/admin/quota-limits").get_json()
+    rows = [r for r in listing if r["user_id"] == user_id]
+    assert len(rows) == 2
+    active = [r for r in rows if r["is_active_key"]]
+    assert len(active) == 1
+    assert active[0]["key_hash"] == database.hash_api_key("new-key")
+
+
 def test_admin_update_rejects_invalid_and_missing_fields(db_path, user_id, monkeypatch):
     monkeypatch.setattr("routes.utils._ADMIN_EMAILS", {"quota-test@example.com"})
+    database.set_user_api_key(user_id, "fake-gemini-key")
 
     client = _client(db_path)
     _login(client, user_id)
@@ -80,8 +112,10 @@ def test_admin_update_rejects_invalid_and_missing_fields(db_path, user_id, monke
 
 def test_admin_can_clear_a_cooldown(db_path, user_id, monkeypatch):
     monkeypatch.setattr("routes.utils._ADMIN_EMAILS", {"quota-test@example.com"})
-    database.get_quota_limits(user_id, quota.get_default_limits())
-    database.set_quota_cooldown(user_id, "2026-08-12 23:59:00")
+    database.set_user_api_key(user_id, "fake-gemini-key")
+    key_hash = database.hash_api_key("fake-gemini-key")
+    database.get_quota_limits(user_id, key_hash, quota.get_default_limits())
+    database.set_quota_cooldown(user_id, key_hash, "2026-08-12 23:59:00")
 
     client = _client(db_path)
     _login(client, user_id)
@@ -89,5 +123,5 @@ def test_admin_can_clear_a_cooldown(db_path, user_id, monkeypatch):
     res = client.patch(f"/api/admin/quota-limits/{user_id}", json={"cooldown_until": None})
     assert res.status_code == 200
 
-    limits = database.get_quota_limits(user_id, quota.get_default_limits())
+    limits = database.get_quota_limits(user_id, key_hash, quota.get_default_limits())
     assert limits["cooldown_until"] is None
