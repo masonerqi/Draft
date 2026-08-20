@@ -91,9 +91,41 @@ def get_db_connection():
     return _PooledConnection(pool, pool.getconn())
 
 
+# Arbitrary but fixed key identifying "this app's schema setup" to Postgres'
+# advisory lock manager. Any constant works as long as every instance uses
+# the same one.
+_SCHEMA_LOCK_KEY = 8_215_407_311_004_552
+
+
 def init_db():
     conn = get_db_connection()
+    try:
+        _create_schema(conn)
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _create_schema(conn):
     cursor = conn.cursor()
+
+    # Serialize schema setup across instances before touching any DDL.
+    #
+    # "CREATE TABLE IF NOT EXISTS" is not atomic against another session
+    # creating the same table at the same moment: both pass the existence
+    # check, then one fails with a duplicate key on pg_type. That is a real
+    # deployment hazard rather than a theoretical one — gunicorn runs with
+    # --preload, so this function executes in the master process before it
+    # binds a port, and an exception here means the container never starts
+    # at all. A deploy that adds a table is exactly when every instance
+    # tries to create it for real, so they all race at once and most of them
+    # die; the platform reports it only as an opaque "function invocation
+    # failed" with no Flask traceback, because Flask never started.
+    #
+    # A transaction-scoped lock (not a session-scoped one) so it is released
+    # by the commit or rollback below no matter how this returns, and so it
+    # still works through a connection pooler running in transaction mode.
+    cursor.execute("SELECT pg_advisory_xact_lock(%s)", (_SCHEMA_LOCK_KEY,))
 
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS users (
@@ -219,9 +251,7 @@ def init_db():
         ON summary_jobs(user_id, created_at)
     """)
 
-    conn.commit()
     cursor.close()
-    conn.close()
 
 
 def save_session(input_type, filename, summary, decisions, action_items, transcript=None, user_id=None,
