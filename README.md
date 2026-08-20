@@ -67,6 +67,37 @@ When you're done:
 deactivate
 ```
 
+## How summarising works (and why it's asynchronous)
+
+Summarising a recording is a multi-minute operation — the file is uploaded to
+the Gemini File API, waits out its `PROCESSING` state, and only then gets
+transcribed and summarised. A 30-minute meeting runs well past the maximum
+duration a hosting platform will hold a single HTTP request open, so
+`POST /summarise` does **not** wait for Gemini:
+
+1. `POST /summarise` does only the fast work — saves the upload, estimates its
+   token cost, runs the pre-flight quota check — then queues the Gemini call
+   and replies `202 {"job_id": "..."}`.
+2. The queued work runs on a small background thread pool
+   ([summary_jobs.py](summary_jobs.py)) and writes its outcome to the
+   `summary_jobs` table.
+3. The browser polls `GET /summarise/jobs/<job_id>` every few seconds. That
+   endpoint returns `{"status": "processing"}` while the job runs, the finished
+   payload once it's done, and otherwise replays the exact status code and body
+   the route used to return inline (401 for a bad key, 429 with its retry time,
+   503 for a retired model), so the client keeps one error path.
+
+Job state lives in Postgres rather than in process memory on purpose: Vercel
+routes requests to independent instances, so a poll very often lands somewhere
+other than the instance running the job. A job that stays unfinished past
+`JOB_STALE_AFTER_SECONDS` (its instance was recycled mid-flight) is reported as
+a 504 rather than leaving the client polling forever.
+
+**Do not make `/summarise` call Gemini inline again.** That was the earlier
+behavior, and it is why uploading a long recording failed with a browser-side
+"confirm your Flask container or server is running" — the server was fine, the
+request had simply outlived its allowance and the connection was cut.
+
 ## Deploying (Vercel — Container preset)
 
 This repo has a [Dockerfile](Dockerfile), so Vercel will detect it and offer **Container** as the application preset — use that, with root directory `./`.

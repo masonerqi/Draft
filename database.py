@@ -17,6 +17,7 @@ from werkzeug.security import generate_password_hash, check_password_hash
 DATABASE_URL = os.environ.get("DATABASE_URL") or os.environ.get("POSTGRES_URL")
 
 _pool = None
+_pool_pid = None
 _pool_lock = threading.Lock()
 
 
@@ -25,16 +26,28 @@ def _get_pool():
     a fresh TCP+TLS+auth connection to a remote Postgres host on every query
     (the previous behavior) added seconds of latency per request; a pool
     pays that cost only when it needs to grow, and reuses connections for
-    every request after that."""
-    global _pool
-    if _pool is None:
+    every request after that.
+
+    The pid check rebuilds the pool after a fork. gunicorn runs with
+    --preload, so init_db() opens the first connection in the *master*
+    process and every worker inherits that pool object — and with it the
+    same open sockets. Two workers using one socket corrupts the Postgres
+    wire protocol, which surfaces as sporadic, unreproducible query errors.
+    A forked child therefore starts its own pool rather than reusing the
+    inherited one."""
+    global _pool, _pool_pid
+    pid = os.getpid()
+    if _pool is None or _pool_pid != pid:
         with _pool_lock:
-            if _pool is None:
+            if _pool is None or _pool_pid != pid:
                 if not DATABASE_URL:
                     raise RuntimeError(
                         "DATABASE_URL (or POSTGRES_URL) must be set to a Postgres connection string."
                     )
+                # Deliberately not closed: the inherited connections belong
+                # to the parent, which is still using them.
                 _pool = psycopg2.pool.ThreadedConnectionPool(1, 10, DATABASE_URL)
+                _pool_pid = pid
     return _pool
 
 
@@ -171,9 +184,39 @@ def init_db():
         )
     """)
 
+    # One row per /summarise submission. Summarising a long recording takes
+    # minutes — far longer than the platform will hold a single HTTP request
+    # open — so the request only enqueues the work and returns a job id; the
+    # outcome (result payload or the error the synchronous route used to
+    # return inline) lands here for the client to poll. Stored in Postgres
+    # rather than in process memory because Vercel routes requests to
+    # independent instances: the poll for a job very often arrives at an
+    # instance other than the one running it.
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS summary_jobs (
+            id TEXT PRIMARY KEY,
+            user_id INTEGER NOT NULL REFERENCES users(id),
+            status TEXT NOT NULL,
+            input_type TEXT NOT NULL,
+            filename TEXT,
+            result TEXT,
+            session_id INTEGER,
+            error_message TEXT,
+            error_status INTEGER,
+            error_detail TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+    """)
+
     cursor.execute("""
         CREATE INDEX IF NOT EXISTS idx_usage_logs_user_key_timestamp
         ON usage_logs(user_id, key_hash, timestamp)
+    """)
+
+    cursor.execute("""
+        CREATE INDEX IF NOT EXISTS idx_summary_jobs_user_created
+        ON summary_jobs(user_id, created_at)
     """)
 
     conn.commit()
@@ -323,6 +366,133 @@ def delete_session(session_id, user_id=None):
         cursor.execute("DELETE FROM sessions WHERE id = %s", (session_id,))
     conn.commit()
     conn.close()
+
+
+# --- Asynchronous summarise jobs -------------------------------------------
+#
+# A job moves 'queued' -> 'processing' -> 'succeeded' | 'failed' and never
+# leaves a terminal state. `result` holds the exact JSON payload the old
+# synchronous route returned on success; `error_status`/`error_message`/
+# `error_detail` hold the exact status code and body it returned on failure,
+# so the client's error handling is unchanged by the move to polling.
+
+SUMMARY_JOB_PENDING_STATUSES = ("queued", "processing")
+
+
+def create_summary_job(job_id, user_id, input_type, filename=None):
+    now = _utcnow_iso()
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        INSERT INTO summary_jobs (id, user_id, status, input_type, filename, created_at, updated_at)
+        VALUES (%s, %s, 'queued', %s, %s, %s, %s)
+    """, (job_id, user_id, input_type, filename, now, now))
+    conn.commit()
+    conn.close()
+    return job_id
+
+
+def mark_summary_job_processing(job_id):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        "UPDATE summary_jobs SET status = 'processing', updated_at = %s WHERE id = %s",
+        (_utcnow_iso(), job_id)
+    )
+    conn.commit()
+    conn.close()
+
+
+def complete_summary_job(job_id, result, session_id=None):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        UPDATE summary_jobs
+        SET status = 'succeeded', result = %s, session_id = %s, updated_at = %s
+        WHERE id = %s
+    """, (json.dumps(result), session_id, _utcnow_iso(), job_id))
+    conn.commit()
+    conn.close()
+
+
+def fail_summary_job(job_id, message, status_code=500, detail=None):
+    """Records a terminal failure. `detail` carries whatever extra fields the
+    old inline error body had (e.g. a 429's resets_in_seconds) so the polling
+    endpoint can reproduce that body verbatim."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        UPDATE summary_jobs
+        SET status = 'failed', error_message = %s, error_status = %s, error_detail = %s, updated_at = %s
+        WHERE id = %s
+    """, (message, status_code, json.dumps(detail) if detail else None, _utcnow_iso(), job_id))
+    conn.commit()
+    conn.close()
+
+
+def get_summary_job(job_id, user_id=None):
+    """Reads one job. `user_id` scopes the lookup to its owner — another
+    account asking for the id gets the same "not found" as a nonexistent one,
+    so a job id is never a way to read someone else's summary."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    query = """
+        SELECT id, user_id, status, input_type, filename, result, session_id,
+               error_message, error_status, error_detail, created_at, updated_at
+        FROM summary_jobs
+        WHERE id = %s
+    """
+    params = [job_id]
+    if user_id is not None:
+        query += " AND user_id = %s"
+        params.append(user_id)
+    cursor.execute(query, tuple(params))
+    row = cursor.fetchone()
+    conn.close()
+
+    if not row:
+        return None
+
+    return {
+        "id": row[0],
+        "user_id": row[1],
+        "status": row[2],
+        "input_type": row[3],
+        "filename": row[4],
+        "result": json.loads(row[5]) if row[5] else None,
+        "session_id": row[6],
+        "error_message": row[7],
+        "error_status": row[8],
+        "error_detail": json.loads(row[9]) if row[9] else None,
+        "created_at": row[10],
+        "updated_at": row[11],
+        "age_seconds": _age_seconds(row[10]),
+    }
+
+
+def _age_seconds(timestamp):
+    """Seconds since a `_utcnow_iso()` timestamp, or None if it can't be
+    parsed. Used to spot jobs whose worker died mid-flight (the instance was
+    recycled), which would otherwise stay 'processing' forever."""
+    try:
+        started = datetime.strptime(timestamp, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
+    except (TypeError, ValueError):
+        return None
+    return max(0.0, (datetime.now(timezone.utc) - started).total_seconds())
+
+
+def cleanup_old_summary_jobs(max_age_hours=24):
+    """Drops finished jobs older than `max_age_hours`. The summary itself
+    lives in `sessions` and is unaffected — this only clears the short-lived
+    handoff rows the polling endpoint reads."""
+    cutoff = _utc_cutoff_iso(timedelta(hours=max_age_hours))
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM summary_jobs WHERE created_at < %s", (cutoff,))
+    conn.commit()
+    deleted = cursor.rowcount
+    conn.close()
+    return max(deleted, 0)
 
 
 def create_folder(user_id, name, icon):
@@ -490,6 +660,7 @@ def delete_user_account(user_id):
     """Cascade-deletes everything owned by a user, then the user row itself."""
     conn = get_db_connection()
     cursor = conn.cursor()
+    cursor.execute("DELETE FROM summary_jobs WHERE user_id = %s", (user_id,))
     cursor.execute("DELETE FROM sessions WHERE user_id = %s", (user_id,))
     cursor.execute("DELETE FROM folders WHERE user_id = %s", (user_id,))
     cursor.execute("DELETE FROM users WHERE id = %s", (user_id,))
@@ -792,18 +963,20 @@ def set_quota_tier(user_id, key_hash, tier):
     conn.close()
 
 
-def start_usage_log_cleanup_thread(interval_seconds=3600):
-    """Runs cleanup_old_usage_logs on a fixed interval in a daemon thread, so
-    usage_logs (written on every summarise request) doesn't grow unbounded.
-    A daemon thread exits automatically with the process; no shutdown hook
-    is needed for a best-effort maintenance sweep like this."""
+def start_maintenance_thread(interval_seconds=3600):
+    """Sweeps the two tables that grow on every summarise request —
+    usage_logs and summary_jobs — on a fixed interval in a daemon thread, so
+    neither grows unbounded. A daemon thread exits automatically with the
+    process; no shutdown hook is needed for a best-effort sweep like this.
+    Each sweep is independent: one failing never skips the other."""
     def _loop():
         while True:
             time.sleep(interval_seconds)
-            try:
-                cleanup_old_usage_logs()
-            except Exception:
-                pass
+            for sweep in (cleanup_old_usage_logs, cleanup_old_summary_jobs):
+                try:
+                    sweep()
+                except Exception:
+                    pass
 
     thread = threading.Thread(target=_loop, daemon=True)
     thread.start()

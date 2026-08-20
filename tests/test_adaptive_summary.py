@@ -7,6 +7,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import app as app_module
 import database
 import gemini_client
+import summary_jobs
 
 
 # --- gemini_client: structured output config, not prompt-only JSON --------
@@ -184,7 +185,7 @@ def _login(client, user_id):
         sess["user_id"] = user_id
 
 
-def test_summarise_route_returns_and_persists_the_adaptive_schema(db_path, user_id, monkeypatch):
+def test_summarise_route_returns_and_persists_the_adaptive_schema(db_path, user_id, monkeypatch, inline_jobs):
     database.set_user_api_key(user_id, "fake-gemini-key")
 
     class FakeUsageMetadata:
@@ -202,14 +203,18 @@ def test_summarise_route_returns_and_persists_the_adaptive_schema(db_path, user_
         return dict(payload), FakeUsageMetadata()
 
     monkeypatch.setattr("routes.summaries.count_tokens", lambda text, user_api_key=None: 20)
-    monkeypatch.setattr("routes.summaries.summarise_transcript", fake_summarise_transcript)
+    monkeypatch.setattr(summary_jobs, "summarise_transcript", fake_summarise_transcript)
 
     client = _client(db_path)
     _login(client, user_id)
 
-    res = client.post("/summarise", data={"transcript": "hello world"})
+    # Summarising is queued rather than answered inline, so the payload comes
+    # back from the job — with the same shape it always had.
+    accepted = client.post("/summarise", data={"transcript": "hello world"})
+    assert accepted.status_code == 202
+    res = client.get(f"/summarise/jobs/{accepted.get_json()['job_id']}")
     assert res.status_code == 200
-    body = res.get_json()
+    body = res.get_json()["result"]
     for key, value in payload.items():
         assert body[key] == value
     # Mirrored old-shape keys, so this response has the same field set the

@@ -4,23 +4,19 @@ import tempfile
 
 from flask import Blueprint, request, jsonify, current_app, send_file
 from routes.utils import get_current_user, login_required
-from gemini_client import (
-    summarise_transcript,
-    summarise_media,
-    count_tokens,
-    is_invalid_api_key_error,
-    is_model_unavailable_error,
-    GEMINI_MODEL,
-)
+from gemini_client import count_tokens
 from database import (
-    save_session,
     get_all_sessions,
     get_session_by_id,
     delete_session,
+    get_summary_job,
+    fail_summary_job,
     get_user_summary_language,
+    SUMMARY_JOB_PENDING_STATUSES,
 )
 import docx_export
 import quota
+import summary_jobs
 
 summaries_bp = Blueprint("summaries_bp", __name__)
 
@@ -30,28 +26,6 @@ def _quota_exceeded_response(exc):
         "error": exc.detail["message"],
         "quota_dimension": exc.dimension,
         "resets_in_seconds": exc.detail["resets_in_seconds"],
-    }), 429
-
-
-def _model_unavailable_response(exc):
-    # Distinct from the generic 500 below on purpose: this is Google having
-    # retired GEMINI_MODEL, identical for every user and not fixable by
-    # anything the requester can do — surfacing it separately (status +
-    # message) makes it stand out in logs as "update the model constant"
-    # rather than blending into ordinary per-request failures.
-    print(f"[gemini] GEMINI_MODEL_UNAVAILABLE: configured model {GEMINI_MODEL!r} was rejected by Gemini: {exc}")
-    return jsonify({
-        "error": "The configured Gemini model is no longer available. This is a server configuration issue, not something you can fix — please contact the site owner.",
-    }), 503
-
-
-def _gemini_rate_limit_response(user_id, api_key, request_type, estimated_tokens, exc):
-    parsed = quota.parse_gemini_429(exc)
-    quota.record_rejection_by_gemini(user_id, api_key, request_type, estimated_tokens, parsed)
-    return jsonify({
-        "error": "Gemini rejected this request for rate limiting.",
-        "retry_after_seconds": parsed["retry_after_seconds"],
-        "quota_violations": parsed["quota_violations"],
     }), 429
 
 
@@ -68,7 +42,16 @@ def get_quota():
 @summaries_bp.route("/summarise", methods=["POST"])
 @login_required
 def summarise():
-    transcript = None
+    """Accepts a transcript or a recording and returns 202 with a job id.
+
+    Everything cheap and immediate happens here — reading the upload,
+    estimating its token cost, and the pre-flight quota check — so a request
+    that can't succeed is still refused inline with the same status code it
+    always used. The Gemini call itself is queued (see summary_jobs) and its
+    outcome is collected from GET /summarise/jobs/<job_id>, because a long
+    recording takes minutes to summarise and the platform will not hold a
+    request open that long.
+    """
     current_user = get_current_user()
     from database import get_user_api_key
 
@@ -100,20 +83,10 @@ def summarise():
             quota.record_preflight_rejection(current_user["id"], user_api_key, "text", estimated_tokens)
             return _quota_exceeded_response(exc)
 
-        try:
-            result, usage_metadata = summarise_transcript(transcript, user_api_key=user_api_key, language=summary_language)
-        except Exception as e:
-            if is_invalid_api_key_error(e):
-                return jsonify({"error": "Your Gemini API key appears to be invalid or expired. Please update it in Settings."}), 401
-            if is_model_unavailable_error(e):
-                return _model_unavailable_response(e)
-            if quota.is_rate_limit_error(e):
-                return _gemini_rate_limit_response(current_user["id"], user_api_key, "text", estimated_tokens, e)
-            return jsonify({"error": f"Gemini processing failed: {str(e)}"}), 500
-
-        quota.record_success(current_user["id"], user_api_key, "text", estimated_tokens, usage_metadata)
-        filename = "paste"
-        input_type = "transcript"
+        job_id = summary_jobs.enqueue_transcript_job(
+            current_user["id"], user_api_key, transcript, summary_language, estimated_tokens
+        )
+        return _accepted_response(job_id)
 
     elif "media" in request.files:
         media_file = request.files["media"]
@@ -128,12 +101,16 @@ def summarise():
             mime_type = guessed or mime_type or "application/octet-stream"
 
         suffix = os.path.splitext(filename)[1]
-        tmp_path = None
-        try:
-            with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
-                media_file.save(tmp)
-                tmp_path = tmp.name
+        # The upload is written to disk here and handed to the job, which
+        # owns it from the moment it has a job id — the job deletes it once
+        # Gemini is done with it. Until then this handler is responsible for
+        # removing it, which is what the `finally` below is guarding.
+        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+            media_file.save(tmp)
+            tmp_path = tmp.name
 
+        job_id = None
+        try:
             if os.path.getsize(tmp_path) == 0:
                 return jsonify({"error": "Empty file received"}), 400
 
@@ -152,51 +129,72 @@ def summarise():
                 quota.record_preflight_rejection(current_user["id"], user_api_key, "audio", estimated_tokens)
                 return _quota_exceeded_response(exc)
 
-            try:
-                result, usage_metadata = summarise_media(tmp_path, mime_type=mime_type, user_api_key=user_api_key, language=summary_language)
-            except Exception as e:
-                if is_invalid_api_key_error(e):
-                    return jsonify({"error": "Your Gemini API key appears to be invalid or expired. Please update it in Settings."}), 401
-                if is_model_unavailable_error(e):
-                    return _model_unavailable_response(e)
-                if quota.is_rate_limit_error(e):
-                    return _gemini_rate_limit_response(current_user["id"], user_api_key, "audio", estimated_tokens, e)
-                return jsonify({"error": f"Gemini media processing failed: {str(e)}"}), 500
-
-            quota.record_success(current_user["id"], user_api_key, "audio", estimated_tokens, usage_metadata)
+            job_id = summary_jobs.enqueue_media_job(
+                current_user["id"], user_api_key, tmp_path, mime_type, filename,
+                summary_language, estimated_tokens,
+            )
         finally:
-            if tmp_path and os.path.exists(tmp_path):
-                os.remove(tmp_path)
+            # Reached on the early returns above and on any unexpected
+            # failure as well as on success — but the file must only be
+            # removed while this handler still owns it.
+            if job_id is None:
+                _discard_upload(tmp_path)
 
-        # Gemini returns the transcript inside the result for media input
-        transcript = result.get("transcript")
-        current_app.logger.debug("DEBUG RESULT: %s", result)
-        input_type = "media"
+        return _accepted_response(job_id)
 
     else:
         return jsonify({"error": "No transcript or media file provided"}), 400
 
-    session_id = save_session(
-        input_type=input_type,
-        filename=filename,
-        summary=result["overview"],
-        decisions=result["decisions_and_takeaways"],
-        action_items=result["action_items"],
-        transcript=transcript,
-        user_id=current_user["id"] if current_user else None,
-        detected_type=result["detected_type"],
-        key_concepts=result["key_concepts"],
-    )
 
-    result["session_id"] = session_id
-    result["transcript"] = transcript
-    # Mirror the old-shape keys too, so this freshly-generated response has
-    # the exact same field set as get_session_by_id returns when this same
-    # session is reloaded later — the frontend's render layer only needs one
-    # code path regardless of which endpoint the data came from.
-    result["summary"] = result["overview"]
-    result["decisions"] = result["decisions_and_takeaways"]
-    return jsonify(result), 200
+def _accepted_response(job_id):
+    # 202, not 200: the work has been accepted, not completed. The client
+    # polls /summarise/jobs/<job_id> from here.
+    return jsonify({"job_id": job_id, "status": "queued"}), 202
+
+
+def _discard_upload(tmp_path):
+    if tmp_path and os.path.exists(tmp_path):
+        try:
+            os.remove(tmp_path)
+        except OSError:
+            current_app.logger.warning("Could not remove temp upload %s", tmp_path)
+
+
+@summaries_bp.route("/summarise/jobs/<job_id>", methods=["GET"])
+@login_required
+def summarise_job(job_id):
+    """Reports on a queued summarise.
+
+    While the job is unfinished this is a 200 with status "queued"/
+    "processing". On success it is a 200 carrying the same payload the
+    synchronous route used to return, under "result". On failure it replays
+    the status code and body that route would have returned — so an invalid
+    key is still a 401 and a Gemini rate limit is still a 429 with its
+    retry_after_seconds — and the client needs only one error path.
+    """
+    current_user = get_current_user()
+    job = get_summary_job(job_id, user_id=current_user["id"])
+    if not job:
+        return jsonify({"error": "Job not found"}), 404
+
+    if job["status"] in SUMMARY_JOB_PENDING_STATUSES:
+        age = job["age_seconds"]
+        if age is not None and age > summary_jobs.JOB_STALE_AFTER_SECONDS:
+            # Nothing is going to finish this one: the instance that was
+            # running it is gone (a redeploy, a recycled container). Close it
+            # out so the client stops polling and gets a real explanation
+            # instead of an indefinite spinner.
+            message = "This recording took too long to process and was abandoned. Please try again."
+            fail_summary_job(job_id, message, 504)
+            return jsonify({"status": "failed", "error": message}), 504
+        return jsonify({"status": job["status"]}), 200
+
+    if job["status"] == "failed":
+        body = {"status": "failed", "error": job["error_message"] or "Summarising failed."}
+        body.update(job["error_detail"] or {})
+        return jsonify(body), job["error_status"] or 500
+
+    return jsonify({"status": "done", "result": job["result"]}), 200
 
 
 @summaries_bp.route("/sessions/<int:session_id>/export/text", methods=["GET"])

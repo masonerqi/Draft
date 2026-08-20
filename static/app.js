@@ -549,10 +549,14 @@ function estimateTextProcessingSeconds(text) {
   return Math.min(18, Math.max(5, text.length / 350));
 }
 
+// The cap is deliberately generous: an hour-long recording really does take
+// several minutes for Gemini to transcribe, and pacing the bar to 150s (the
+// old ceiling) made every long upload look stalled at 92% for most of its
+// actual run.
 function estimateMediaProcessingSeconds(file, durationSeconds) {
   const uploadEstimate = file.size / (1.5 * 1024 * 1024); // ~1.5MB/s, conservative
   const processEstimate = durationSeconds ? Math.max(10, durationSeconds * 0.15) : 22;
-  return Math.min(150, Math.max(10, uploadEstimate + processEstimate));
+  return Math.min(900, Math.max(10, uploadEstimate + processEstimate));
 }
 
 // Matches app.py's MAX_CONTENT_LENGTH — checked client-side too so an
@@ -626,6 +630,37 @@ async function handleFileUpload(event) {
   await submitToAPI(formData, "media", estimateMediaProcessingSeconds(file, duration));
 }
 
+// /summarise no longer answers with the summary itself — summarising a long
+// recording takes minutes, far longer than the platform will hold a request
+// open, so it accepts the work (202 + a job id) and the result is collected
+// by polling. These control that poll: how often to ask, and how long to
+// keep asking before giving up on a job the server has evidently lost.
+const JOB_POLL_INTERVAL_MS = 3000;
+const JOB_POLL_GIVE_UP_MS = 35 * 60 * 1000;
+// A poll that fails outright (a redeploy, a dropped connection, a moment of
+// flaky wifi) is not the job failing — keep polling through a few of them
+// before treating the connection as genuinely gone.
+const JOB_POLL_MAX_CONSECUTIVE_ERRORS = 5;
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+// Reads a JSON body, turning "the response wasn't JSON at all" into an error
+// that says so. That case is not hypothetical: a gateway timeout or a proxy
+// error page is HTML, and parsing it used to throw an opaque SyntaxError
+// that the catch below reported as "your Flask server isn't running" — which
+// was never true and sent debugging in the wrong direction entirely.
+async function readJsonResponse(res) {
+  const body = await res.text();
+  try {
+    return JSON.parse(body);
+  } catch (err) {
+    throw new Error(
+      `The server returned a ${res.status} response that wasn't JSON. ` +
+      "This usually means the request was cut short by the hosting platform rather than by the app."
+    );
+  }
+}
+
 async function submitToAPI(formData, kind, estimatedSeconds) {
   showLoading(kind, estimatedSeconds);
   hideError();
@@ -636,44 +671,108 @@ async function submitToAPI(formData, kind, estimatedSeconds) {
       body: formData,
       credentials: "same-origin",
     });
-    const data = await res.json();
+    const data = await readJsonResponse(res);
     if (!res.ok) {
-      const errorMessage = data.error || "Unknown server fault";
-      // Covers "No Gemini API key configured...", "Gemini API key is
-      // required...", and "...API key appears to be invalid or expired..."
-      // — any backend error about the key sends the user straight to where
-      // they'd fix it, instead of a generic alert.
-      if (errorMessage.toLowerCase().includes("api key")) {
-        openSettings("api-key");
-        elements.settingsError.textContent = errorMessage;
-        hideLoading();
-        return;
-      }
-      // Rate-limit 429s (pre-flight rejection or a passthrough from a real
-      // Gemini 429) carry a real reset time — surface that instead of a
-      // generic message, and refresh the quota indicator in case Settings
-      // is opened next.
-      if (res.status === 429) {
-        const resetSeconds = data.resets_in_seconds ?? data.retry_after_seconds;
-        const resetText = typeof resetSeconds === "number" ? ` Try again in ${formatQuotaDuration(resetSeconds)}.` : "";
-        hideLoading();
-        showInput();
-        showInputError(`${errorMessage}${resetText}`);
-        fetchQuotaStatus();
-        return;
-      }
-      alert("Error: " + errorMessage);
-      hideLoading();
-      showInput();
+      handleSubmitFailure(res.status, data);
+      return;
+    }
+    // 202 means "accepted, not finished" — the summary arrives via the job.
+    if (data.job_id) {
+      await pollSummaryJob(data.job_id);
       return;
     }
     showResults(data);
     loadHistory();
   } catch (err) {
-    alert("Network exception. Confirm your Flask container or server is running.");
+    reportSubmitException(err);
+  }
+}
+
+// Waits out a queued summarise, surfacing whatever the job finally reports.
+// The polling endpoint replays the exact status and body the request used to
+// answer with inline, so failures land in the same handler as before.
+async function pollSummaryJob(jobId) {
+  const startedAt = Date.now();
+  let consecutiveErrors = 0;
+
+  while (true) {
+    await sleep(JOB_POLL_INTERVAL_MS);
+
+    let res;
+    let data;
+    try {
+      res = await fetch(`/summarise/jobs/${encodeURIComponent(jobId)}`, { credentials: "same-origin" });
+      data = await readJsonResponse(res);
+      consecutiveErrors = 0;
+    } catch (err) {
+      consecutiveErrors += 1;
+      if (consecutiveErrors >= JOB_POLL_MAX_CONSECUTIVE_ERRORS) {
+        reportSubmitException(err);
+        return;
+      }
+      continue;
+    }
+
+    if (!res.ok) {
+      handleSubmitFailure(res.status, data);
+      return;
+    }
+    if (data.status === "done") {
+      showResults(data.result);
+      loadHistory();
+      return;
+    }
+
+    if (Date.now() - startedAt > JOB_POLL_GIVE_UP_MS) {
+      hideLoading();
+      showInput();
+      showInputError(
+        "This recording is still processing after a long wait. It may yet finish — check your notes in a few minutes before trying again."
+      );
+      return;
+    }
+  }
+}
+
+function handleSubmitFailure(status, data) {
+  const errorMessage = (data && data.error) || "Unknown server fault";
+
+  // Covers "No Gemini API key configured...", "Gemini API key is
+  // required...", and "...API key appears to be invalid or expired..."
+  // — any backend error about the key sends the user straight to where
+  // they'd fix it, instead of a generic alert.
+  if (errorMessage.toLowerCase().includes("api key")) {
+    openSettings("api-key");
+    elements.settingsError.textContent = errorMessage;
+    hideLoading();
+    return;
+  }
+  // Rate-limit 429s (pre-flight rejection or a passthrough from a real
+  // Gemini 429) carry a real reset time — surface that instead of a
+  // generic message, and refresh the quota indicator in case Settings
+  // is opened next.
+  if (status === 429) {
+    const resetSeconds = data.resets_in_seconds ?? data.retry_after_seconds;
+    const resetText = typeof resetSeconds === "number" ? ` Try again in ${formatQuotaDuration(resetSeconds)}.` : "";
     hideLoading();
     showInput();
+    showInputError(`${errorMessage}${resetText}`);
+    fetchQuotaStatus();
+    return;
   }
+  hideLoading();
+  showInput();
+  showInputError(errorMessage);
+}
+
+// The old message here asserted the server was down, which was almost never
+// the real cause and hid the actual one. Report what genuinely happened and
+// leave the diagnosis open.
+function reportSubmitException(err) {
+  hideLoading();
+  showInput();
+  const detail = err && err.message ? ` (${err.message})` : "";
+  showInputError(`Couldn't reach the server. Check your connection and try again.${detail}`);
 }
 
 // Minimal, intentionally-scoped markdown: only "**bold**" is supported,
@@ -1666,7 +1765,7 @@ function showLoading(kind, estimatedSeconds) {
   setLoadingProgress(0);
   setLoadingMessage(stages[0].msg);
   elements.loadingContext.textContent = kind === "media"
-    ? "Longer recordings can take a minute or two."
+    ? "A long recording can take several minutes. You can leave this open."
     : "Usually just a few seconds.";
 
   loadingTimer = setInterval(() => {

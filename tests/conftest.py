@@ -6,6 +6,15 @@ import pytest
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import database
+import summary_jobs
+
+
+@pytest.fixture
+def inline_jobs(monkeypatch):
+    """Runs queued summarise jobs on the calling thread instead of the
+    background pool, so a test can assert on a job's outcome immediately
+    after the request that queued it rather than racing a worker thread."""
+    monkeypatch.setattr(summary_jobs, "_dispatch", lambda fn, *args: fn(*args))
 
 
 @pytest.fixture
@@ -22,7 +31,9 @@ def db_path(monkeypatch):
 
     conn = database.get_db_connection()
     cursor = conn.cursor()
-    cursor.execute("DROP TABLE IF EXISTS quota_limits, usage_logs, sessions, folders, users CASCADE")
+    cursor.execute(
+        "DROP TABLE IF EXISTS summary_jobs, quota_limits, usage_logs, sessions, folders, users CASCADE"
+    )
     conn.commit()
     cursor.close()
     conn.close()
