@@ -1,5 +1,5 @@
 import os
-from flask import Flask, jsonify
+from flask import Flask, jsonify, request
 from flask_cors import CORS
 from dotenv import load_dotenv
 
@@ -15,7 +15,7 @@ MAX_UPLOAD_BYTES = 300 * 1024 * 1024
 load_dotenv()
 
 # Import database init function
-from database import init_db, start_maintenance_thread
+from database import ensure_schema, start_maintenance_thread
 from firebase_config import init_firebase
 
 # Blueprints will be imported and registered in the factory
@@ -49,8 +49,29 @@ def create_app(test_config=None):
     # Initialize optional third-party services
     init_firebase()
 
-    # Initialize or migrate the database
-    init_db()
+    # Initialize or migrate the database.
+    #
+    # Deliberately not fatal. This runs before the server binds a port, so an
+    # exception escaping here takes the whole container down with it — no
+    # server, and no traceback in the platform's logs, because Flask never
+    # started. All the operator sees is an opaque 500 from the edge, which is
+    # the hardest possible failure to diagnose. Starting anyway means the
+    # cause is printed once at boot, every request explains itself, and a
+    # database that was only briefly unreachable recovers on its own.
+    ensure_schema()
+
+    @app.before_request
+    def require_schema():
+        # Static files don't touch the database, so keep serving them.
+        if request.endpoint == "static":
+            return None
+        if ensure_schema() is None:
+            return None
+        # The traceback goes to the logs (see ensure_schema); the client gets
+        # the situation without the internals.
+        return jsonify({
+            "error": "The app can't reach its database right now. This is a server-side problem — please try again shortly."
+        }), 503
 
     # Periodic sweep of usage_logs rows older than the longest rolling quota
     # window (1 day), and of finished summary_jobs handoff rows. Skipped

@@ -3,6 +3,7 @@ import json
 import os
 import threading
 import time
+import traceback
 from datetime import datetime, timedelta, timezone
 
 import psycopg2
@@ -95,6 +96,41 @@ def get_db_connection():
 # advisory lock manager. Any constant works as long as every instance uses
 # the same one.
 _SCHEMA_LOCK_KEY = 8_215_407_311_004_552
+
+
+_schema_ready = threading.Event()
+_schema_init_lock = threading.Lock()
+
+
+def ensure_schema():
+    """Creates the schema if this process hasn't already done so successfully.
+    Returns None on success, or the exception that prevented it — it does not
+    raise.
+
+    Callers get an error to report rather than an exception to propagate
+    because of where this runs: gunicorn boots the app before binding a port,
+    so an exception escaping startup kills the container with no server and
+    no traceback anywhere the platform can show you. The deployment simply
+    goes dark and every request comes back as an opaque "function invocation
+    failed". Reporting instead of raising keeps the app alive to say what is
+    actually wrong.
+
+    Retried rather than done once, so a database that was only briefly
+    unreachable during boot recovers by itself instead of leaving the
+    deployment permanently broken."""
+    if _schema_ready.is_set():
+        return None
+    with _schema_init_lock:
+        if _schema_ready.is_set():
+            return None
+        try:
+            init_db()
+        except Exception as exc:
+            print("[database] schema setup failed:")
+            traceback.print_exc()
+            return exc
+        _schema_ready.set()
+        return None
 
 
 def init_db():
